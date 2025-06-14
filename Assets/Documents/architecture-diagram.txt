@@ -1,0 +1,107 @@
+NO MORE ENGINE - PROPOSED ARCHITECTURE
+=====================================
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                                   INPUT LAYER                                    │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  InputSerializer                                                                 │
+│  • Converts Unity Input → InputPackets                                          │
+│  • Manages input contexts (Menu/InGame)                                         │
+│  • Fixed 60fps packet generation                                                │
+└────────────────────┬───────────────────────────────────┬────────────────────────┘
+                     │                                   │
+                     ▼                                   ▼
+┌────────────────────────────────────┐  ┌───────────────────────────────────────┐
+│          SESSION LAYER             │  │         SIMULATION LAYER              │
+├────────────────────────────────────┤  ├───────────────────────────────────────┤
+│                                    │  │                                       │
+│  SessionCoordinator                │  │  SimulationWorld (ECS)               │
+│  • Simple state machine            │  │  • Deterministic gameplay             │
+│  • Menu → Game → Results           │  │  • Fixed timestep updates             │
+│  • Controls app flow               │  │  • Physics, collision, movement      │
+│                                    │  │                                       │
+│  GameConfiguration                 │  │  SimulationSystems                    │
+│  • Player slots (P1-P4)           │  │  • PlayerInputMovementSystem          │
+│  • Player registry/assignment      │  │  • SimpleMovementSystem               │
+│  • Match settings                  │  │  • CollisionDetectionSystem          │
+│  • Stage selection                 │  │  • CollisionResponseSystem           │
+│  • Win conditions                  │  │  • GravitySystem                      │
+│                                    │  │  • PhysicsSystem                      │
+│  SessionStates                     │  │  • GameplaySpawnerSystem*             │
+│  • MainMenuState                   │  │  (* spawns entities during play)     │
+│  • MainMenuState                   │  │                                       │
+│  • LobbyState (Mission/Versus)     │  │  SimulationComponents                │
+│  • InGameState                     │  │  • FixTransformComponent             │
+│  • ResultsState                    │  │  • SimpleMovementComponent           │
+│                                    │  │  • CollisionBoundsComponent          │
+└─────────────┬──────────────────────┘  │  • PhysicsComponent                   │
+              │                         │  • PlayerControlledTag                │
+              │                         └───────────────────────────────────────┘
+              │                                              ▲
+              │         ┌────────────────────────────────────┴───┐
+              └─────────►          SESSION BRIDGE                │
+                        ├────────────────────────────────────────┤
+                        │  SimulationInitializer                 │
+                        │  • Reads GameConfiguration            │
+                        │  • Creates initial entities           │
+                        │  • Sets up match parameters           │
+                        │  • Maps players → entities            │
+                        │                                        │
+                        │  SimulationController                  │
+                        │  • Start/Stop simulation              │
+                        │  • Pause/Resume                       │
+                        │  • Cleanup entities                  │
+                        └────────────────────────────────────────┘
+                                             │
+                                             ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                                  VIEWER LAYER                                   │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  ViewerManager                                                                  │
+│  • Orchestrates all visualization                                               │
+│                                                                                 │
+│  GameplayViewer                          │  UIViewer                           │
+│  • SimEntityViewer                       │  • MenuUIHandler (per state)       │
+│  • CollisionViewer                       │  • HUDHandler                       │
+│  • PhysicsViewer                         │  • ResultsUIHandler                │
+│  • EffectsViewer                         │  • LobbyUIHandlers                  │
+│                                          │                                     │
+│  DebugViewer (separate, optional)                                              │
+│  • System diagnostics                                                          │
+│  • Performance metrics                                                         │
+│  • Developer tools                                                             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+KEY PRINCIPLES:
+===============
+1. SESSION manages game flow, players, and configuration
+2. SIMULATION is pure ECS - no knowledge of sessions or UI
+3. SESSION BRIDGE is the only connection between layers
+4. VIEWER observes but never modifies simulation state
+5. Each layer can be tested independently
+
+DATA FLOW:
+==========
+Menu Input → SessionCoordinator → GameConfiguration → SimulationSpawner → ECS Entities
+Game Input → InputSerializer → PlayerInputMovementSystem → Entity Movement
+Entity State → Viewers → Visual Output
+
+EXAMPLE FLOW:
+=============
+1. Player presses "Start Game" in menu
+2. SessionCoordinator transitions to InGameState
+3. InGameState tells SimulationInitializer to set up match
+4. SimulationInitializer reads GameConfiguration (2 players, TestArena stage)
+5. SimulationInitializer creates initial player entities and environment
+6. Simulation begins running at fixed timestep
+7. Input flows directly to simulation systems
+8. GameplaySpawnerSystem creates new entities as needed (projectiles, powerups, etc)
+9. Viewers render the current state
+
+NOTES:
+======
+- "Lobby" = any pre-game configuration menu (mission select, versus setup, etc)
+- SimulationInitializer only runs at match start
+- Mid-game spawning happens through dedicated ECS systems
+- Player Registry logic is part of GameConfiguration in Session Layer
+- UI and Gameplay viewers are completely separate systems
