@@ -1,3 +1,5 @@
+using System.Net.NetworkInformation;
+using NoMoreEngine.Simulation.Snapshot;
 using Unity.Entities;
 
 
@@ -60,7 +62,9 @@ namespace NoMoreEngine.Simulation.Components
     /// Per-entity physics properties
     /// Controls how individual entities respond to gravity and physics
     /// </summary>
-    public struct PhysicsComponent : IComponentData
+
+    [Snapshotable(Priority = 2)]
+    public struct PhysicsComponent : IComponentData, ISnapshotable<PhysicsComponent>
     {
         public fix mass;                    // Entity mass (affects gravity acceleration)
         public fix gravityScale;            // Individual gravity multiplier
@@ -114,6 +118,9 @@ namespace NoMoreEngine.Simulation.Components
             }
             return velocity;
         }
+
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<PhysicsComponent>();
+        public bool ValidateSnapshot() => mass > (fix)0;
 
         /// <summary>
         /// Preset for normal gameplay entities
@@ -169,5 +176,7 @@ namespace NoMoreEngine.Simulation.Components
             affectedByGravity: false,
             terminalVelocity: (fix)0
         );
+
+
     }
 }

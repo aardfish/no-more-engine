@@ -3,99 +3,119 @@ using Unity.Collections;
 using UnityEngine;
 using NoMoreEngine.Simulation.Components;
 
-
 namespace NoMoreEngine.Simulation.Systems
 {
     /// <summary>
     /// Core time management system that controls the fixed timestep simulation
-    /// Runs early in the frame to accumulate time and trigger simulation steps
+    /// Fixed to handle structural changes properly
     /// </summary>
     [UpdateInGroup(typeof(InitializationSystemGroup))]
     [UpdateAfter(typeof(BeginInitializationEntityCommandBufferSystem))]
     public partial class SimulationTimeSystem : SystemBase
     {
-        private EntityQuery timeQuery;
-        private EntityQuery accumulatorQuery;
         private SimulationStepSystemGroup fixedStepGroup;
         
         // Performance monitoring
         private float lastFpsUpdate = 0f;
         private int frameCount = 0;
         
+        // Track if we've initialized
+        private bool isInitialized = false;
+        
         protected override void OnCreate()
         {
-            // Create queries
-            timeQuery = GetEntityQuery(typeof(SimulationTimeComponent));
-            accumulatorQuery = GetEntityQuery(typeof(TimeAccumulatorComponent));
-            
-            // Ensure time singleton exists
-            if (timeQuery.IsEmpty)
-            {
-                CreateTimeSingleton();
-            }
-            
             // Get reference to fixed step group
             fixedStepGroup = World.GetOrCreateSystemManaged<SimulationStepSystemGroup>();
             
-            // Require time component to update
-            RequireForUpdate<SimulationTimeComponent>();
-            RequireForUpdate<TimeAccumulatorComponent>();
+            // Don't create entities here - wait until first update
+            // This avoids structural change issues
         }
         
-        private void CreateTimeSingleton()
+        protected override void OnStartRunning()
         {
-            Debug.Log("[SimulationTimeSystem] Creating time singleton entity");
+            // Ensure singleton exists when system starts running
+            EnsureTimeSingleton();
+        }
+        
+        private void EnsureTimeSingleton()
+        {
+            if (isInitialized) return;
             
-            var entity = EntityManager.CreateEntity();
-            EntityManager.SetName(entity, "SimulationTime");
+            // Check if singleton already exists
+            var timeQuery = GetEntityQuery(typeof(SimulationTimeComponent));
+            var accumulatorQuery = GetEntityQuery(typeof(TimeAccumulatorComponent));
             
-            // Add time components with default 60Hz configuration
-            EntityManager.AddComponentData(entity, SimulationTimeComponent.Create60Hz());
-            EntityManager.AddComponentData(entity, TimeAccumulatorComponent.Create60Hz());
+            if (timeQuery.IsEmpty || accumulatorQuery.IsEmpty)
+            {
+                Debug.Log("[SimulationTimeSystem] Creating time singleton entity");
+                
+                var entity = EntityManager.CreateEntity();
+                EntityManager.SetName(entity, "SimulationTime");
+                
+                // Add time components with default 60Hz configuration
+                EntityManager.AddComponentData(entity, SimulationTimeComponent.Create60Hz());
+                EntityManager.AddComponentData(entity, TimeAccumulatorComponent.Create60Hz());
+            }
+            
+            isInitialized = true;
         }
         
         protected override void OnUpdate()
         {
+            // Ensure initialization
+            if (!isInitialized)
+            {
+                EnsureTimeSingleton();
+                return; // Skip this frame to let structural changes complete
+            }
+            
             // Get Unity frame time
             float unityDeltaTime = SystemAPI.Time.DeltaTime;
             
-            // Get components
-            var time = SystemAPI.GetSingletonRW<SimulationTimeComponent>();
-            var accumulator = SystemAPI.GetSingletonRW<TimeAccumulatorComponent>();
+            // Use SystemAPI which handles structural changes automatically
+            if (!SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time))
+            {
+                Debug.LogError("[SimulationTimeSystem] SimulationTimeComponent not found!");
+                return;
+            }
+            
+            if (!SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
+            {
+                Debug.LogError("[SimulationTimeSystem] TimeAccumulatorComponent not found!");
+                return;
+            }
             
             // Add frame time to accumulator
-            accumulator.ValueRW.Accumulate(unityDeltaTime);
+            accumulator.Accumulate(unityDeltaTime);
             
             // Track steps this frame
             int stepsThisFrame = 0;
             
             // Fixed timestep loop
-            while (accumulator.ValueRO.ShouldStep() && 
-                   stepsThisFrame < accumulator.ValueRO.maxCatchUpSteps)
+            while (accumulator.ShouldStep() && 
+                   stepsThisFrame < accumulator.maxCatchUpSteps)
             {
                 // Advance simulation time
-                time.ValueRW.Step();
+                time.Step();
                 
                 // Consume the timestep
-                accumulator.ValueRW.ConsumeStep();
+                accumulator.ConsumeStep();
                 
                 // Run all simulation systems for this tick
-                RunSimulationStep(time.ValueRO.currentTick);
+                RunSimulationStep(time.currentTick);
                 
                 stepsThisFrame++;
             }
             
             // Update stats
-            accumulator.ValueRW.stepsLastFrame = stepsThisFrame;
-            UpdatePerformanceStats(ref time.ValueRW, unityDeltaTime);
+            accumulator.stepsLastFrame = stepsThisFrame;
             
-            // Log warnings if we're falling behind
-            if (stepsThisFrame >= accumulator.ValueRO.maxCatchUpSteps)
-            {
-                Debug.LogWarning($"[SimulationTimeSystem] Simulation falling behind! " +
-                               $"Capped at {stepsThisFrame} steps this frame. " +
-                               $"Remaining accumulator: {accumulator.ValueRO.accumulator:F3}");
-            }
+            // Write back modified components
+            SystemAPI.SetSingleton(time);
+            SystemAPI.SetSingleton(accumulator);
+            
+            // Update performance stats
+            UpdatePerformanceStats(time.currentTick, unityDeltaTime);
         }
         
         private void RunSimulationStep(uint currentTick)
@@ -107,35 +127,42 @@ namespace NoMoreEngine.Simulation.Systems
             fixedStepGroup.Update();
             
             // Debug log every second
-            if (currentTick % 60 == 0)
+            if (currentTick % 60 == 0 && currentTick > 0)
             {
-                var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
-                Debug.Log($"[SimulationTimeSystem] Tick {currentTick}, " +
-                         $"Elapsed: {time.GetElapsedSeconds():F2}s");
+                //Debug.Log($"[SimulationTimeSystem] Tick {currentTick}, " +
+                         //$"Elapsed: {currentTick / 60f:F2}s");
             }
         }
         
-        private void UpdatePerformanceStats(ref SimulationTimeComponent time, float unityDeltaTime)
+        private void UpdatePerformanceStats(uint currentTick, float unityDeltaTime)
         {
             // Update FPS counter every second
             frameCount++;
             if (UnityEngine.Time.time - lastFpsUpdate >= 1f)
             {
                 float fps = frameCount / (UnityEngine.Time.time - lastFpsUpdate);
-                float simTickRate = time.ticksThisSecond;
+                
+                // Get current time component to check tick rate
+                if (SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var timeComp))
+                {
+                    float simTickRate = timeComp.ticksThisSecond;
+                    
+                    // Log performance if there's a mismatch
+                    if (Mathf.Abs(simTickRate - timeComp.tickRate) > 1)
+                    {
+                        Debug.LogWarning($"[SimulationTimeSystem] Tick rate mismatch! " +
+                                       $"Target: {timeComp.tickRate}Hz, Actual: {simTickRate}Hz, " +
+                                       $"FPS: {fps:F1}");
+                    }
+                    
+                    // Reset tick counter
+                    timeComp.ticksThisSecond = 0;
+                    SystemAPI.SetSingleton(timeComp);
+                }
                 
                 // Reset counters
-                time.ticksThisSecond = 0;
                 frameCount = 0;
                 lastFpsUpdate = UnityEngine.Time.time;
-                
-                // Log performance
-                if (Mathf.Abs(simTickRate - time.tickRate) > 1)
-                {
-                    Debug.LogWarning($"[SimulationTimeSystem] Tick rate mismatch! " +
-                                   $"Target: {time.tickRate}Hz, Actual: {simTickRate}Hz, " +
-                                   $"FPS: {fps:F1}");
-                }
             }
         }
         
@@ -149,8 +176,11 @@ namespace NoMoreEngine.Simulation.Systems
             if (paused)
             {
                 // Reset accumulator when pausing to prevent time buildup
-                var accumulator = SystemAPI.GetSingletonRW<TimeAccumulatorComponent>();
-                accumulator.ValueRW.Reset();
+                if (SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
+                {
+                    accumulator.Reset();
+                    SystemAPI.SetSingleton(accumulator);
+                }
             }
             
             Debug.Log($"[SimulationTimeSystem] Simulation {(paused ? "paused" : "resumed")}");
@@ -161,9 +191,11 @@ namespace NoMoreEngine.Simulation.Systems
         /// </summary>
         public uint GetCurrentTick()
         {
-            if (timeQuery.IsEmpty) return 0;
-            var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
-            return time.currentTick;
+            if (SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time))
+            {
+                return time.currentTick;
+            }
+            return 0;
         }
         
         /// <summary>
@@ -173,14 +205,17 @@ namespace NoMoreEngine.Simulation.Systems
         {
             Debug.Log("[SimulationTimeSystem] Resetting simulation time");
             
-            var time = SystemAPI.GetSingletonRW<SimulationTimeComponent>();
-            var accumulator = SystemAPI.GetSingletonRW<TimeAccumulatorComponent>();
-            
-            // Reset time
-            time.ValueRW = SimulationTimeComponent.Create60Hz();
-            
-            // Reset accumulator
-            accumulator.ValueRW.Reset();
+            if (SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time) &&
+                SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
+            {
+                // Reset time
+                time = SimulationTimeComponent.Create60Hz();
+                SystemAPI.SetSingleton(time);
+                
+                // Reset accumulator
+                accumulator.Reset();
+                SystemAPI.SetSingleton(accumulator);
+            }
         }
     }
 }

@@ -1,5 +1,6 @@
 using Unity.Entities;
 using System.Runtime.InteropServices;
+using NoMoreEngine.Simulation.Snapshot;
 
 
 namespace NoMoreEngine.Simulation.Components
@@ -7,7 +8,9 @@ namespace NoMoreEngine.Simulation.Components
     /// <summary>
     /// Simple linear movement component for testing transform updates
     /// </summary>
-    public struct SimpleMovementComponent : IComponentData
+
+    [Snapshotable(Priority = 1)]
+    public struct SimpleMovementComponent : IComponentData, ISnapshotable<SimpleMovementComponent>
     {
         public fix3 velocity;
 
@@ -21,6 +24,9 @@ namespace NoMoreEngine.Simulation.Components
         }
 
         public static SimpleMovementComponent Stationary => new SimpleMovementComponent(fix3.zero, false);
+
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<SimpleMovementComponent>();
+        public bool ValidateSnapshot() => true;
     }
 
 }

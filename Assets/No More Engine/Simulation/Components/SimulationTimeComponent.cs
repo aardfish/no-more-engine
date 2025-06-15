@@ -1,13 +1,14 @@
 using Unity.Entities;
-
+using NoMoreEngine.Simulation.Snapshot;
 
 namespace NoMoreEngine.Simulation.Components
 {
     /// <summary>
     /// Core time tracking component for deterministic simulation
-    /// Singleton component that manages simulation ticks and timing
+    /// Now snapshotable to ensure time consistency across save/load
     /// </summary>
-    public struct SimulationTimeComponent : IComponentData
+    [Snapshotable(Priority = -1)] // Highest priority - time should be first
+    public struct SimulationTimeComponent : IComponentData, ISnapshotable<SimulationTimeComponent>
     {
         // Core timing
         public uint currentTick;           // Deterministic frame counter
@@ -85,11 +86,23 @@ namespace NoMoreEngine.Simulation.Components
         {
             return (float)elapsedTime;
         }
+        
+        // ISnapshotable implementation
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<SimulationTimeComponent>();
+        
+        public bool ValidateSnapshot()
+        {
+            // Validate time is in reasonable bounds
+            return tickRate > 0 && 
+                   tickRate <= 240 && // Max 240Hz seems reasonable
+                   deltaTime > fix.Zero &&
+                   currentTick >= lastConfirmedTick;
+        }
     }
     
     /// <summary>
     /// Component for accumulating Unity time and determining when to step simulation
-    /// Handles the fixed timestep loop
+    /// This should NOT be snapshotted as it's Unity-specific timing
     /// </summary>
     public struct TimeAccumulatorComponent : IComponentData
     {

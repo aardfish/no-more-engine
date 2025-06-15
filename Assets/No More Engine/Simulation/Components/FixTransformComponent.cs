@@ -1,3 +1,4 @@
+using NoMoreEngine.Simulation.Snapshot;
 using Unity.Entities;
 
 
@@ -6,7 +7,8 @@ namespace NoMoreEngine.Simulation.Components
     /// <summary>
     /// Core Transform component using fixed-point math for deterministic simulation
     /// </summary>
-    public struct FixTransformComponent : IComponentData
+    [Snapshotable(Priority = 0)] // Default priority, can be overridden by other components
+    public struct FixTransformComponent : IComponentData, ISnapshotable<FixTransformComponent>
     {
         public fix3 position;
         public fixQuaternion rotation;
@@ -25,6 +27,9 @@ namespace NoMoreEngine.Simulation.Components
             fix3.one
             );
 
+        // Isnapshottable implementation
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<FixTransformComponent>();
+        public bool ValidateSnapshot() => true; // Transform is always valid
         //TODO:
         //-----
         //* add parent reference for hierarchy later

@@ -1,3 +1,4 @@
+using NoMoreEngine.Simulation.Snapshot;
 using Unity.Entities;
 
 
@@ -6,9 +7,13 @@ namespace NoMoreEngine.Simulation.Components
     /// <summary>
     /// Tag component to identify player-controlled entities
     /// </summary>
-    public struct PlayerControlledTag : IComponentData
+
+    [Snapshotable(Priority = 10)] // Higher priority for player control
+    public struct PlayerControlledTag : IComponentData, ISnapshotable<PlayerControlledTag>
     {
         // Just a tag, no data needed
+        public int GetSnapshotSize() => 0; // No data to serialize
+        public bool ValidateSnapshot() => true; // Always valid since it's just a tag
     }
 
     /// <summary>

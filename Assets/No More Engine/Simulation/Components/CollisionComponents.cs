@@ -1,3 +1,4 @@
+using NoMoreEngine.Simulation.Snapshot;
 using Unity.Entities;
 using Unity.Mathematics;
 
@@ -7,7 +8,9 @@ namespace NoMoreEngine.Simulation.Components
     /// <summary>
     /// Core collision bounds using AABB (Axis-Aligned Bounding Box)
     /// </summary>
-    public struct CollisionBoundsComponent : IComponentData
+
+    [Snapshotable(Priority = 3)]
+    public struct CollisionBoundsComponent : IComponentData, ISnapshotable<CollisionBoundsComponent>
     {
         public fix3 size;           // AABB dimensions (full size, not half-extents)
         public fix3 offset;         // Offset from transform center
@@ -30,6 +33,9 @@ namespace NoMoreEngine.Simulation.Components
             min = center - halfSize;
             max = center + halfSize;
         }
+
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<CollisionBoundsComponent>();
+        public bool ValidateSnapshot() => size.x > (fix)0 && size.y > (fix)0 && size.z > (fix)0;
     }
 
     /// <summary>
@@ -52,7 +58,9 @@ namespace NoMoreEngine.Simulation.Components
     /// <summary>
     /// Defines how an entity responds to collisions
     /// </summary>
-    public struct CollisionResponseComponent : IComponentData
+
+    [Snapshotable(Priority = 4)]
+    public struct CollisionResponseComponent : IComponentData, ISnapshotable<CollisionResponseComponent>
     {
         public CollisionResponse responseType;
         public fix bounciness;          // 0-1, how much velocity is retained on bounce
@@ -60,7 +68,7 @@ namespace NoMoreEngine.Simulation.Components
         public CollisionLayer entityLayer;     // What layer this entity is on
         public CollisionLayer collidesWith;    // What layers this entity collides with
 
-        public CollisionResponseComponent(CollisionResponse responseType, 
+        public CollisionResponseComponent(CollisionResponse responseType,
             CollisionLayer entityLayer, CollisionLayer collidesWith,
             fix bounciness = default, fix friction = default)
         {
@@ -70,6 +78,9 @@ namespace NoMoreEngine.Simulation.Components
             this.bounciness = bounciness == default ? (fix)0.5f : bounciness;
             this.friction = friction == default ? (fix)0.1f : friction;
         }
+
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<CollisionResponseComponent>();
+        public bool ValidateSnapshot() => true;
     }
 
     /// <summary>
@@ -88,7 +99,9 @@ namespace NoMoreEngine.Simulation.Components
     /// Marks entities as static for collision optimization
     /// Static entities don't move and can be cached/optimized
     /// </summary>
-    public struct StaticColliderComponent : IComponentData
+
+    [Snapshotable(Priority = 11)]
+    public struct StaticColliderComponent : IComponentData, ISnapshotable<StaticColliderComponent>
     {
         public bool isStatic;
 
@@ -96,6 +109,9 @@ namespace NoMoreEngine.Simulation.Components
         {
             this.isStatic = isStatic;
         }
+
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<StaticColliderComponent>();
+        public bool ValidateSnapshot() => true; // Static state is always valid
     }
 
     /// <summary>
