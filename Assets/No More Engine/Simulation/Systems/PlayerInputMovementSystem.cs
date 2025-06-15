@@ -11,8 +11,7 @@ namespace NoMoreEngine.Simulation.Systems
     /// Simple system that connects input to player movement
     /// Demonstrates the complete flow from input to simulation
     /// </summary>
-    [UpdateInGroup(typeof(SimulationSystemGroup))]
-    [UpdateBefore(typeof(SimpleMovementSystem))]
+    [UpdateInGroup(typeof(InputProcessingPhase))]
     public partial class PlayerInputMovementSystem : SystemBase
     {
         private InputSerializer inputSerializer;
