@@ -1,0 +1,199 @@
+# Complete System Ordering Guide for No More Engine
+
+## System Execution Flow
+
+```
+SimulationStepSystemGroup
+├── InputProcessingPhase (First)
+│   └── PlayerInputMovementSystem
+├── PhysicsPhase
+│   ├── GravitySystem
+│   ├── SimpleMovementSystem
+│   ├── CollisionDetectionSystem
+│   ├── CollisionResponseSystem
+│   └── SimEntityTransformSystem
+├── GameplayPhase
+│   └── (Future: GameplaySpawnerSystem, DamageSystem, etc.)
+└── CleanupPhase (Last)
+    └── (Future: DestroyEntitySystem, EventCleanupSystem)
+```
+
+## Detailed System Ordering
+
+### 1. PlayerInputMovementSystem
+```csharp
+[UpdateInGroup(typeof(InputProcessingPhase))]
+// No UpdateBefore/After needed - it's the only system in this phase
+public partial class PlayerInputMovementSystem : SystemBase
+```
+**Why**: Must run first to convert input into velocity changes before physics
+
+---
+
+### 2. GravitySystem
+```csharp
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateBefore(typeof(SimpleMovementSystem))]
+public partial struct GravitySystem : ISystem
+```
+**Why**: Modifies velocity before movement integration
+
+---
+
+### 3. SimpleMovementSystem
+```csharp
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateAfter(typeof(GravitySystem))]
+[UpdateBefore(typeof(CollisionDetectionSystem))]
+public partial struct SimpleMovementSystem : ISystem
+```
+**Why**: Integrates velocity into position after all forces applied, before collision
+
+---
+
+### 4. CollisionDetectionSystem
+```csharp
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateAfter(typeof(SimpleMovementSystem))]
+[UpdateBefore(typeof(CollisionResponseSystem))]
+public partial struct CollisionDetectionSystem : ISystem
+```
+**Why**: Detects collisions after movement, generates collision events
+
+---
+
+### 5. CollisionResponseSystem
+```csharp
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateAfter(typeof(CollisionDetectionSystem))]
+[UpdateBefore(typeof(SimEntityTransformSystem))]
+public partial struct CollisionResponseSystem : ISystem
+```
+**Why**: Resolves collisions by adjusting positions/velocities
+
+---
+
+### 6. SimEntityTransformSystem
+```csharp
+[UpdateInGroup(typeof(PhysicsPhase), OrderLast = true)]
+// OrderLast ensures it runs after ALL other physics systems
+public partial struct SimEntityTransformSystem : ISystem
+```
+**Why**: Final transform updates, hierarchy calculations (future)
+
+---
+
+## Future Systems Placement
+
+### GameplaySpawnerSystem (Not Yet Implemented)
+```csharp
+[UpdateInGroup(typeof(GameplayPhase))]
+[UpdateBefore(typeof(DamageSystem))]
+public partial struct GameplaySpawnerSystem : ISystem
+```
+**Why**: Creates entities that other gameplay systems might process
+
+### DamageSystem (Not Yet Implemented)
+```csharp
+[UpdateInGroup(typeof(GameplayPhase))]
+[UpdateAfter(typeof(GameplaySpawnerSystem))]
+public partial struct DamageSystem : ISystem
+```
+**Why**: Processes damage after spawning, before health checks
+
+### DestroyEntitySystem (Not Yet Implemented)
+```csharp
+[UpdateInGroup(typeof(CleanupPhase))]
+public partial struct DestroyEntitySystem : ISystem
+```
+**Why**: Safely destroys entities at end of frame
+
+---
+
+## Best Practices
+
+### 1. **Always Be Explicit**
+```csharp
+// ❌ BAD - Relies on implicit ordering
+[UpdateInGroup(typeof(PhysicsPhase))]
+
+// ✅ GOOD - Explicit about dependencies
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateAfter(typeof(GravitySystem))]
+[UpdateBefore(typeof(CollisionDetectionSystem))]
+```
+
+### 2. **Use OrderFirst/OrderLast Sparingly**
+```csharp
+// Only for systems that MUST run first/last in phase
+[UpdateInGroup(typeof(PhysicsPhase), OrderLast = true)]
+```
+
+### 3. **Document Dependencies**
+```csharp
+/// <summary>
+/// Must run after GravitySystem (needs final velocity)
+/// Must run before CollisionDetection (needs updated positions)
+/// </summary>
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateAfter(typeof(GravitySystem))]
+[UpdateBefore(typeof(CollisionDetectionSystem))]
+public partial struct SimpleMovementSystem : ISystem
+```
+
+### 4. **Cross-Phase Dependencies**
+Systems in different phases are already ordered by phase order:
+- InputProcessingPhase → always before PhysicsPhase
+- PhysicsPhase → always before GameplayPhase
+- GameplayPhase → always before CleanupPhase
+
+### 5. **Testing Order**
+Add this debug system to verify ordering:
+```csharp
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateAfter(typeof(CollisionResponseSystem))]
+[UpdateBefore(typeof(SimEntityTransformSystem))]
+public partial struct SystemOrderDebugSystem : ISystem
+{
+    public void OnUpdate(ref SystemState state)
+    {
+        Debug.Log($"[SystemOrder] Running between CollisionResponse and Transform");
+    }
+}
+```
+
+---
+
+## Common Ordering Mistakes
+
+### ❌ Multiple UpdateInGroup
+```csharp
+[UpdateInGroup(typeof(SimulationStepSystemGroup))]  // ERROR!
+[UpdateInGroup(typeof(PhysicsPhase))]               // CS0579
+```
+
+### ❌ Circular Dependencies
+```csharp
+// SystemA: [UpdateBefore(typeof(SystemB))]
+// SystemB: [UpdateBefore(typeof(SystemA))]  // ERROR!
+```
+
+### ❌ Wrong Phase
+```csharp
+// Collision detection in Input phase? No!
+[UpdateInGroup(typeof(InputProcessingPhase))]
+public partial struct CollisionDetectionSystem
+```
+
+---
+
+## Quick Reference Table
+
+| System | Phase | After | Before |
+|--------|-------|-------|---------|
+| PlayerInputMovementSystem | InputProcessingPhase | - | - |
+| GravitySystem | PhysicsPhase | - | SimpleMovementSystem |
+| SimpleMovementSystem | PhysicsPhase | GravitySystem | CollisionDetectionSystem |
+| CollisionDetectionSystem | PhysicsPhase | SimpleMovementSystem | CollisionResponseSystem |
+| CollisionResponseSystem | PhysicsPhase | CollisionDetectionSystem | SimEntityTransformSystem |
+| SimEntityTransformSystem | PhysicsPhase | - (OrderLast) | - |

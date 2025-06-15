@@ -15,6 +15,8 @@ namespace NoMoreEngine.Simulation.Systems
     [UpdateInGroup(typeof(PhysicsPhase))]
     [UpdateAfter(typeof(CollisionDetectionSystem))]
     [UpdateBefore(typeof(SimEntityTransformSystem))]
+
+    [BurstCompile]
     public partial struct CollisionResponseSystem : ISystem
     {
         [BurstCompile]
@@ -32,8 +34,8 @@ namespace NoMoreEngine.Simulation.Systems
             const int MAX_COLLISIONS_PER_FRAME = 100;
 
             // Process collision responses for all entities that have collision events
-            foreach (var (transform, response, movement, collisionEvents, entity) in 
-                SystemAPI.Query<RefRW<FixTransformComponent>, RefRO<CollisionResponseComponent>, 
+            foreach (var (transform, response, movement, collisionEvents, entity) in
+                SystemAPI.Query<RefRW<FixTransformComponent>, RefRO<CollisionResponseComponent>,
                     RefRW<SimpleMovementComponent>, DynamicBuffer<CollisionEventBuffer>>()
                 .WithEntityAccess())
             {
@@ -54,17 +56,17 @@ namespace NoMoreEngine.Simulation.Systems
                     switch (response.ValueRO.responseType)
                     {
                         case CollisionResponse.Stop:
-                            HandleStopResponse(ref transform.ValueRW, ref movement.ValueRW, 
+                            HandleStopResponse(ref transform.ValueRW, ref movement.ValueRW,
                                 in contactNormal, in collisionEvent.penetrationDepth);
                             break;
 
                         case CollisionResponse.Slide:
-                            HandleSlideResponse(ref transform.ValueRW, ref movement.ValueRW, 
+                            HandleSlideResponse(ref transform.ValueRW, ref movement.ValueRW,
                                 in contactNormal, in collisionEvent.penetrationDepth, in response.ValueRO.friction);
                             break;
 
                         case CollisionResponse.Bounce:
-                            HandleBounceResponse(ref transform.ValueRW, ref movement.ValueRW, 
+                            HandleBounceResponse(ref transform.ValueRW, ref movement.ValueRW,
                                 in contactNormal, in collisionEvent.penetrationDepth, in response.ValueRO.bounciness);
                             break;
 
@@ -95,7 +97,7 @@ namespace NoMoreEngine.Simulation.Systems
         /// Stop response: Move entity out of collision and stop movement
         /// </summary>
         [BurstCompile]
-        private static void HandleStopResponse(ref FixTransformComponent transform, 
+        private static void HandleStopResponse(ref FixTransformComponent transform,
             ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth)
         {
             // Position correction: move entity out of collision
@@ -123,7 +125,7 @@ namespace NoMoreEngine.Simulation.Systems
         /// Slide response: Move entity out of collision and slide along surface
         /// </summary>
         [BurstCompile]
-        private static void HandleSlideResponse(ref FixTransformComponent transform, 
+        private static void HandleSlideResponse(ref FixTransformComponent transform,
             ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth, in fix friction)
         {
             // Position correction: move entity out of collision
@@ -156,7 +158,7 @@ namespace NoMoreEngine.Simulation.Systems
         /// Bounce response: Move entity out of collision and reflect velocity
         /// </summary>
         [BurstCompile]
-        private static void HandleBounceResponse(ref FixTransformComponent transform, 
+        private static void HandleBounceResponse(ref FixTransformComponent transform,
             ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth, in fix bounciness)
         {
             // Position correction: move entity out of collision

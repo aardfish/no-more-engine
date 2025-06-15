@@ -1,0 +1,157 @@
+# System Execution Order Visualization
+
+## Frame-by-Frame Execution Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Unity Frame N                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  SimulationTimeSystem                                       │
+│  ├─ Accumulate Unity deltaTime                             │
+│  ├─ Check if accumulated >= 1/60s                          │
+│  └─ If yes, trigger simulation step(s)                     │
+│                                                             │
+│      ┌──────────────────────────────────────────┐          │
+│      │        SIMULATION STEP (Tick)            │          │
+│      ├──────────────────────────────────────────┤          │
+│      │                                          │          │
+│      │  🎮 InputProcessingPhase                 │          │
+│      │  └─ PlayerInputMovementSystem           │          │
+│      │      • Read input packets               │          │
+│      │      • Convert to velocity changes      │          │
+│      │                                          │          │
+│      │  ⚛️ PhysicsPhase                         │          │
+│      │  ├─ GravitySystem                       │          │
+│      │  │   • Apply gravity to velocity        │          │
+│      │  │                                       │          │
+│      │  ├─ SimpleMovementSystem                │          │
+│      │  │   • position += velocity * deltaTime │          │
+│      │  │                                       │          │
+│      │  ├─ CollisionDetectionSystem            │          │
+│      │  │   • AABB tests                       │          │
+│      │  │   • Generate collision events        │          │
+│      │  │                                       │          │
+│      │  ├─ CollisionResponseSystem             │          │
+│      │  │   • Process collision events         │          │
+│      │  │   • Adjust positions/velocities      │          │
+│      │  │                                       │          │
+│      │  └─ SimEntityTransformSystem            │          │
+│      │      • Final transform updates          │          │
+│      │      • (Future: hierarchy updates)      │          │
+│      │                                          │          │
+│      │  🎯 GameplayPhase                        │          │
+│      │  └─ (Future systems)                    │          │
+│      │                                          │          │
+│      │  🧹 CleanupPhase                         │          │
+│      │  └─ (Future cleanup)                    │          │
+│      │                                          │          │
+│      └──────────────────────────────────────────┘          │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Data Flow Through Systems
+
+```
+Input Packet
+    ↓
+PlayerInputMovementSystem
+    ↓ (sets velocity)
+GravitySystem
+    ↓ (modifies velocity)
+SimpleMovementSystem
+    ↓ (updates position)
+CollisionDetectionSystem
+    ↓ (creates events)
+CollisionResponseSystem
+    ↓ (adjusts position/velocity)
+SimEntityTransformSystem
+    ↓ (final transform)
+Rendered Frame
+```
+
+## Why This Order Matters
+
+### 1. **Input First**
+- Player actions must be processed before physics
+- Sets initial velocities for the frame
+
+### 2. **Forces Before Movement**
+- Gravity and other forces modify velocity
+- Movement integrates final velocity into position
+
+### 3. **Detection Before Response**
+- Must know what collided before resolving
+- Separation allows for complex collision rules
+
+### 4. **Transform Last**
+- All position modifications complete
+- Ready for rendering/networking
+
+## Adding New Systems
+
+### Before Adding a System, Ask:
+1. **What data does it read?** → Must run AFTER systems that write that data
+2. **What data does it write?** → Must run BEFORE systems that read that data
+3. **What phase does it belong to?**
+   - Input processing? → InputProcessingPhase
+   - Physics/movement? → PhysicsPhase
+   - Game logic? → GameplayPhase
+   - Cleanup? → CleanupPhase
+
+### Example: Adding a Jump System
+```csharp
+// Needs to:
+// - Read input (jump button)
+// - Modify velocity (add upward)
+// - Run before movement integration
+
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateAfter(typeof(PlayerInputMovementSystem))]  // After input
+[UpdateBefore(typeof(GravitySystem))]             // Before gravity
+public partial struct JumpSystem : ISystem
+{
+    // Reads: jump input, grounded state
+    // Writes: velocity.y
+}
+```
+
+## Debugging Execution Order
+
+### Method 1: Log in Each System
+```csharp
+public void OnUpdate(ref SystemState state)
+{
+    var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
+    Debug.Log($"[{GetType().Name}] Tick {time.currentTick}");
+    // ... rest of system
+}
+```
+
+### Method 2: Unity Profiler
+- Window → Analysis → Profiler
+- Look for your system names in order
+
+### Method 3: ECS System Inspector
+- Window → DOTS → Systems
+- Shows real-time system execution
+
+## Common Patterns
+
+### Producer-Consumer
+```
+SpawnerSystem → DamageSystem → HealthSystem → DestroySystem
+(produces)      (consumes)      (consumes)     (consumes)
+```
+
+### Modifier Chain
+```
+BaseVelocity → +Gravity → +Wind → +Boost → FinalMovement
+```
+
+### Event Processing
+```
+CollisionDetection → CollisionEvents → DamageEvents → SoundEvents
+(creates)            (processes)        (creates)       (consumes)
+```

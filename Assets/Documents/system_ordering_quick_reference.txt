@@ -1,0 +1,73 @@
+# 🎯 No More Engine - System Ordering Quick Reference
+
+## Current System Order (Top to Bottom)
+
+```
+📥 InputProcessingPhase
+   └─ PlayerInputMovementSystem
+
+⚛️ PhysicsPhase
+   ├─ GravitySystem
+   ├─ SimpleMovementSystem ← [After: Gravity] [Before: Collision]
+   ├─ CollisionDetectionSystem ← [After: Movement] [Before: Response]
+   ├─ CollisionResponseSystem ← [After: Detection] [Before: Transform]
+   └─ SimEntityTransformSystem ← [OrderLast]
+
+🎮 GameplayPhase
+   └─ (empty - future systems here)
+
+🧹 CleanupPhase
+   └─ (empty - future cleanup here)
+```
+
+## Copy-Paste Attributes
+
+```csharp
+// For Input Systems
+[UpdateInGroup(typeof(InputProcessingPhase))]
+
+// For Physics Systems  
+[UpdateInGroup(typeof(PhysicsPhase))]
+[UpdateAfter(typeof(PreviousSystem))]
+[UpdateBefore(typeof(NextSystem))]
+
+// For Gameplay Systems
+[UpdateInGroup(typeof(GameplayPhase))]
+
+// For Cleanup Systems
+[UpdateInGroup(typeof(CleanupPhase))]
+```
+
+## Decision Tree for New Systems
+
+```
+Does it process player input?
+  YES → InputProcessingPhase
+  NO ↓
+
+Does it move entities or handle physics?
+  YES → PhysicsPhase
+  NO ↓
+
+Does it handle game logic (health, damage, spawning)?
+  YES → GameplayPhase
+  NO ↓
+
+Does it clean up or destroy entities?
+  YES → CleanupPhase
+  NO → Reconsider what phase it belongs to
+```
+
+## ⚠️ Remember
+
+- ❌ Never use multiple `[UpdateInGroup]` on one system
+- ✅ Always add time requirement: `state.RequireForUpdate<SimulationTimeComponent>()`
+- ✅ Be explicit with `[UpdateAfter]` and `[UpdateBefore]`
+- ✅ Test with `DeterminismTestTool` after adding systems
+
+## 🚀 Next Systems to Add
+
+1. **JumpSystem** → PhysicsPhase (after Input, before Gravity)
+2. **GameplaySpawnerSystem** → GameplayPhase (first)
+3. **DamageSystem** → GameplayPhase (after Spawner)
+4. **DestroyEntitySystem** → CleanupPhase (last)
