@@ -1,0 +1,213 @@
+## Time System Architecture for No More Engine
+
+### Core Components
+
+```csharp
+// 1. Simulation Time Component (Singleton)
+public struct SimulationTimeComponent : IComponentData
+{
+    public uint currentTick;           // Deterministic frame counter
+    public uint tickRate;              // Ticks per second (60)
+    public fix deltaTime;              // Fixed timestep (1/60)
+    public fix elapsedTime;            // Total simulation time
+    
+    // Rollback support
+    public uint lastConfirmedTick;     // Last tick all inputs confirmed
+    public uint maxRollbackTicks;      // Maximum rollback window (8-10 frames)
+    
+    public static SimulationTimeComponent Create60Hz()
+    {
+        return new SimulationTimeComponent
+        {
+            currentTick = 0,
+            tickRate = 60,
+            deltaTime = fix.One / (fix)60,
+            elapsedTime = fix.Zero,
+            lastConfirmedTick = 0,
+            maxRollbackTicks = 8
+        };
+    }
+}
+
+// 2. Time Accumulator for Fixed Timestep
+public struct TimeAccumulatorComponent : IComponentData
+{
+    public float accumulator;          // Unity time accumulation
+    public float fixedDeltaTime;       // Target fixed timestep (1/60f)
+    public int maxCatchUpSteps;        // Prevent spiral of death
+    
+    public bool ShouldStep()
+    {
+        return accumulator >= fixedDeltaTime;
+    }
+    
+    public void ConsumeStep()
+    {
+        accumulator -= fixedDeltaTime;
+    }
+}
+```
+
+### Time Management System
+
+```csharp
+[UpdateInGroup(typeof(InitializationSystemGroup))]
+[UpdateBefore(typeof(BeginSimulationEntityCommandBufferSystem))]
+public partial class SimulationTimeSystem : SystemBase
+{
+    private EntityQuery timeQuery;
+    private InputBuffer inputBuffer;
+    
+    protected override void OnCreate()
+    {
+        // Create time singleton if it doesn't exist
+        var entity = EntityManager.CreateEntity();
+        EntityManager.AddComponentData(entity, SimulationTimeComponent.Create60Hz());
+        EntityManager.AddComponentData(entity, new TimeAccumulatorComponent
+        {
+            fixedDeltaTime = 1f / 60f,
+            maxCatchUpSteps = 3
+        });
+        
+        RequireForUpdate<SimulationTimeComponent>();
+    }
+    
+    protected override void OnUpdate()
+    {
+        var deltaTime = SystemAPI.Time.DeltaTime;
+        var time = SystemAPI.GetSingletonRW<SimulationTimeComponent>();
+        var accumulator = SystemAPI.GetSingletonRW<TimeAccumulatorComponent>();
+        
+        // Accumulate Unity time
+        accumulator.ValueRW.accumulator += deltaTime;
+        
+        // Clamp to prevent spiral of death
+        if (accumulator.ValueRO.accumulator > accumulator.ValueRO.fixedDeltaTime * accumulator.ValueRO.maxCatchUpSteps)
+        {
+            accumulator.ValueRW.accumulator = accumulator.ValueRO.fixedDeltaTime * accumulator.ValueRO.maxCatchUpSteps;
+        }
+        
+        // Fixed timestep loop (similar to your reference code)
+        int stepsThisFrame = 0;
+        while (accumulator.ValueRO.ShouldStep())
+        {
+            // Check for rollback before stepping
+            if (ShouldRollback(time.ValueRO.currentTick))
+            {
+                PerformRollback();
+                break; // Exit loop to restart from rollback point
+            }
+            
+            // Step simulation
+            StepSimulation(ref time.ValueRW);
+            accumulator.ValueRW.ConsumeStep();
+            stepsThisFrame++;
+            
+            // Safety check
+            if (stepsThisFrame >= accumulator.ValueRO.maxCatchUpSteps)
+                break;
+        }
+    }
+    
+    private void StepSimulation(ref SimulationTimeComponent time)
+    {
+        // Increment tick
+        time.currentTick++;
+        time.elapsedTime += time.deltaTime;
+        
+        // Signal simulation systems to run
+        World.GetExistingSystemManaged<FixedStepSimulationSystemGroup>()?.Update();
+    }
+}
+```
+
+### Integration with Your Systems
+
+```csharp
+// Create a custom system group for deterministic ordering
+[DisableAutoCreation]
+public class FixedStepSimulationSystemGroup : ComponentSystemGroup
+{
+    protected override void OnUpdate()
+    {
+        // This runs once per simulation tick
+        base.OnUpdate();
+    }
+}
+
+// Update your movement system to use simulation time
+[UpdateInGroup(typeof(FixedStepSimulationSystemGroup))]
+[UpdateAfter(typeof(GravitySystem))]
+public partial struct SimpleMovementSystem : ISystem
+{
+    public void OnUpdate(ref SystemState state)
+    {
+        // Get deterministic delta time
+        var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
+        fix deltaTime = time.deltaTime;
+        
+        // Update positions with deterministic time
+        foreach (var (transform, movement) in SystemAPI.Query<RefRW<FixTransformComponent>, 
+            RefRO<SimpleMovementComponent>>())
+        {
+            if (!movement.ValueRO.isMoving) continue;
+            transform.ValueRW.position += movement.ValueRO.velocity * deltaTime;
+        }
+    }
+}
+```
+
+### State Snapshot Integration
+
+```csharp
+// Snapshot component for time
+public struct TimeSnapshot : IComponentData
+{
+    public uint tick;
+    public SimulationTimeComponent timeState;
+    
+    public TimeSnapshot(SimulationTimeComponent current)
+    {
+        tick = current.currentTick;
+        timeState = current;
+    }
+}
+
+// Add to your state management
+public partial class SnapshotSystem : SystemBase
+{
+    private NativeHashMap<uint, TimeSnapshot> timeSnapshots;
+    
+    public void CaptureSnapshot(uint tick)
+    {
+        var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
+        timeSnapshots[tick] = new TimeSnapshot(time);
+        // ... capture other game state
+    }
+    
+    public void RestoreSnapshot(uint tick)
+    {
+        if (timeSnapshots.TryGetValue(tick, out var snapshot))
+        {
+            SystemAPI.SetSingleton(snapshot.timeState);
+            // ... restore other game state
+        }
+    }
+}
+```
+
+### Key Differences from Reference Code
+
+1. **ECS Integration**: Uses singleton components instead of static classes
+2. **Fixed-Point Math**: All simulation uses `fix` types for determinism
+3. **System Groups**: Leverages Unity's system ordering
+4. **Separation of Concerns**: Time accumulation separate from simulation stepping
+
+### Implementation Order
+
+1. **Today**: Create the basic time components and system
+2. **Tomorrow**: Integrate with existing systems (replace hardcoded deltaTime)
+3. **This Week**: Add snapshot/restore functionality
+4. **Next Week**: Implement rollback logic with input buffer
+
+This approach gives you the same fixed-timestep benefits as your reference code while working within Unity's ECS architecture and maintaining determinism for your rollback networking goals.

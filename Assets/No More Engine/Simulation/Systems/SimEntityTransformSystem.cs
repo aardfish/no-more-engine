@@ -4,7 +4,7 @@ using Unity.Burst;
 
 namespace NoMoreEngine.Simulation.Systems
 {
-    [UpdateInGroup(typeof(SimulationSystemGroup))]
+    [UpdateInGroup(typeof(PhysicsPhase))]
     public partial struct SimEntityTransformSystem : ISystem
     {
         [BurstCompile]

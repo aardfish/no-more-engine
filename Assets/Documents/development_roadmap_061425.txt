@@ -1,0 +1,148 @@
+## Development Roadmap for No More Engine
+
+### Phase 1: Deterministic Foundation (2-3 weeks)
+**Goal: Establish rock-solid deterministic simulation**
+
+#### Immediate Goals:
+1. **Centralized Time System**
+   ```csharp
+   // Create SimulationTimeComponent singleton
+   - Fixed timestep management
+   - Frame counter
+   - Tick rate configuration
+   ```
+
+2. **Deterministic System Ordering**
+   - Define explicit update order for all systems
+   - Create custom SystemGroup hierarchy
+   - Add frame boundary markers
+
+3. **Validate Determinism**
+   - Expand DeterminismTestTool to test gameplay scenarios
+   - Add automated tests for common operations
+   - Create determinism regression suite
+
+### Phase 2: State Management (2-3 weeks)
+**Goal: Enable state capture and restoration**
+
+#### Immediate Goals:
+1. **Snapshot System**
+   ```csharp
+   // Core features needed:
+   - ISnapshotable interface for components
+   - SnapshotManager for state capture
+   - Efficient binary serialization
+   ```
+
+2. **Input Recording**
+   - Store input history with frame numbers
+   - Replay system for testing
+   - Save/load replay files
+
+3. **State Rollback**
+   - Implement rollback to previous snapshots
+   - Test with simple scenarios
+   - Measure performance impact
+
+### Phase 3: Core Gameplay (3-4 weeks)
+**Goal: Make it actually playable**
+
+#### Immediate Goals:
+1. **Combat System**
+   - Health/damage components
+   - Hit detection using existing collision
+   - Basic attack animations (even if debug visuals)
+
+2. **Projectile System**
+   - Object pooling for projectiles
+   - Spawn/despawn lifecycle
+   - Different projectile types
+
+3. **Win Conditions**
+   - Stock/life tracking
+   - Match end detection
+   - Proper game over flow
+
+### Phase 4: Network Foundation (3-4 weeks)
+**Goal: Prepare for multiplayer**
+
+1. **Input Prediction**
+   - Local input prediction
+   - Remote input buffer
+   - Delay compensation
+
+2. **State Synchronization**
+   - Delta compression
+   - Reliable state updates
+   - Connection management
+
+3. **Rollback Integration**
+   - Combine all systems
+   - Handle conflicts
+   - Performance optimization
+
+## Immediate Priority Actions (This Week)
+
+1. **Create Time System**
+   ```csharp
+   public struct SimulationTimeComponent : IComponentData
+   {
+       public uint currentTick;
+       public fix deltaTime;
+       public fix tickRate;
+   }
+   ```
+
+2. **Fix Hard-coded Values**
+   - Replace all `0.016f` with time system
+   - Create GameConstants ScriptableObject
+   - Centralize magic numbers
+
+3. **Implement Basic Spawning**
+   ```csharp
+   public partial struct GameplaySpawnerSystem : ISystem
+   {
+       // Spawn projectiles during gameplay
+       // Use object pooling
+   }
+   ```
+
+4. **Add Jump Mechanic**
+   - Simple up velocity on button press
+   - Ground detection
+   - Complete the control loop
+
+5. **Create System Ordering**
+   ```csharp
+   [UpdateInGroup(typeof(FixedStepSimulationSystemGroup))]
+   [UpdateAfter(typeof(InputGatheringPhase))]
+   [UpdateBefore(typeof(PhysicsPhase))]
+   ```
+
+## Success Metrics
+
+- **Week 1**: Time system integrated, determinism tests pass consistently
+- **Week 2**: Can capture/restore game state, jump mechanic works
+- **Week 3**: Basic combat with projectiles spawning/destroying
+- **Month 2**: Full replay system, state rollback working
+- **Month 3**: Local multiplayer prototype with rollback
+
+## Pro Tips
+
+1. **Test Determinism Early and Often**
+   - Run automated tests after every major change
+   - Use the DeterminismTestTool as your canary
+
+2. **Keep Systems Small**
+   - Each system should do one thing well
+   - Makes debugging determinism issues easier
+
+3. **Document State Dependencies**
+   - Note which components affect which others
+   - Critical for rollback implementation
+
+4. **Profile Everything**
+   - Measure performance impact of each feature
+   - Rollback is performance-critical
+
+Start with the Time System today - it's the foundation everything else builds on. Once that's solid, you'll have confidence to tackle the more complex features.

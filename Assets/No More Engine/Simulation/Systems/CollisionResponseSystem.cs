@@ -12,7 +12,7 @@ namespace NoMoreEngine.Simulation.Systems
     /// Runs after collision detection, before transform system
     /// Uses hybrid approach: position correction + velocity modification
     /// </summary>
-    [UpdateInGroup(typeof(SimulationSystemGroup))]
+    [UpdateInGroup(typeof(PhysicsPhase))]
     [UpdateAfter(typeof(CollisionDetectionSystem))]
     [UpdateBefore(typeof(SimEntityTransformSystem))]
     public partial struct CollisionResponseSystem : ISystem

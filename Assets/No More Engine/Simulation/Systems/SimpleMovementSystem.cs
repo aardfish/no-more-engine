@@ -8,51 +8,44 @@ namespace NoMoreEngine.Simulation.Systems
 {
     /// <summary>
     /// Simple movement system that updates positions based on velocity
-    /// Runs before the transform to ensure proper order
+    /// Now uses the deterministic time system instead of hardcoded values
     /// </summary>
-    [UpdateInGroup(typeof(SimulationSystemGroup))]
-    [UpdateBefore(typeof(SimEntityTransformSystem))]
+    [UpdateInGroup(typeof(PhysicsPhase))]
     public partial struct SimpleMovementSystem : ISystem
     {
         [BurstCompile]
         public void OnCreate(ref SystemState state)
         {
-            //system initialization
+            // Require time component to exist
+            state.RequireForUpdate<SimulationTimeComponent>();
         }
 
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
-            //get fixed delta time for deterministic movement
-            //temporary simple fixed timestep
-            fix deltaTime = (fix)0.016f;
+            // Get deterministic delta time from time system
+            var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
+            fix deltaTime = time.deltaTime;
 
-            //update positions for all entities with movement
+            // Update positions for all entities with movement
             foreach (var (transform, movement) in SystemAPI.Query<RefRW<FixTransformComponent>, 
                 RefRO<SimpleMovementComponent>>())
             {
-                //only move if movement is enabled
+                // Only move if movement is enabled
                 if (!movement.ValueRO.isMoving) continue;
 
-                //simple position integration: position += velocity * deltaTime
+                // Simple position integration: position += velocity * deltaTime
                 fix3 currentPosition = transform.ValueRO.position;
                 fix3 velocity = movement.ValueRO.velocity;
 
                 transform.ValueRW.position = currentPosition + velocity * deltaTime;
             }
-
-            //TODO:
-            //-----
-            //* add bounds check
-            //* add collision detection
-            //* implement proper fixed timestep
         }
 
         [BurstCompile]
         public void OnDestroy(ref SystemState state)
         {
-            //cleanup when system is destroyed
+            // Cleanup when system is destroyed
         }
     }
-
 }

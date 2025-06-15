@@ -12,7 +12,7 @@ namespace NoMoreEngine.Simulation.Systems
     /// Runs after movement, before collision response
     /// Generates collision events that are processed by other systems
     /// </summary>
-    [UpdateInGroup(typeof(SimulationSystemGroup))]
+    [UpdateInGroup(typeof(PhysicsPhase))]
     [UpdateAfter(typeof(SimpleMovementSystem))]
     [UpdateBefore(typeof(CollisionResponseSystem))]
     public partial struct CollisionDetectionSystem : ISystem

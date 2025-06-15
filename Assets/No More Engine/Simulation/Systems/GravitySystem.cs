@@ -8,9 +8,9 @@ namespace NoMoreEngine.Simulation.Systems
 {
     /// <summary>
     /// Gravity system that applies gravitational acceleration to physics-enabled entities
-    /// Runs before movement system to update velocities, which are then integrated into positions
+    /// Now uses deterministic time from SimulationTimeComponent
     /// </summary>
-    [UpdateInGroup(typeof(SimulationSystemGroup))]
+    [UpdateInGroup(typeof(PhysicsPhase))]
     [UpdateBefore(typeof(SimpleMovementSystem))]
     public partial struct GravitySystem : ISystem
     {
@@ -29,9 +29,11 @@ namespace NoMoreEngine.Simulation.Systems
             physicsEntitiesQuery = SystemAPI.QueryBuilder()
                 .WithAll<SimpleMovementComponent, PhysicsComponent>()
                 .Build();
+                
+            // Require time component
+            state.RequireForUpdate<SimulationTimeComponent>();
         }
 
-        // Remove BurstCompile from OnUpdate to avoid the memory issue
         public void OnUpdate(ref SystemState state)
         {
             // Ensure global gravity exists
@@ -49,9 +51,9 @@ namespace NoMoreEngine.Simulation.Systems
             // Early exit if no physics entities
             if (physicsEntitiesQuery.IsEmpty) return;
 
-            // Get fixed delta time for deterministic physics
-            // TODO: Replace with proper time system when available
-            fix deltaTime = (fix)0.016f; // 60 FPS fixed timestep
+            // Get deterministic delta time from time system
+            var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
+            fix deltaTime = time.deltaTime;
 
             // Apply gravity to all physics-enabled entities
             foreach (var (movement, physics) in
