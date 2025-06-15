@@ -10,8 +10,8 @@ using NoMoreEngine.Input;
 namespace NoMoreEngine.Simulation.Snapshot
 {
     /// <summary>
-    /// ECS System that manages snapshot capture and restoration
-    /// Cleaned up version with proper player control restoration
+    /// Deterministic snapshot system - captures and restores exact state
+    /// No post-restore modifications to maintain determinism
     /// </summary>
     [UpdateInGroup(typeof(SimulationStepSystemGroup), OrderLast = true)]
     [UpdateAfter(typeof(CleanupPhase))]
@@ -44,7 +44,7 @@ namespace NoMoreEngine.Simulation.Snapshot
             timeSystem = World.GetExistingSystemManaged<SimulationTimeSystem>();
             inputMovementSystem = World.GetExistingSystemManaged<PlayerInputMovementSystem>();
 
-            Debug.Log("[SnapshotSystem] Initialized with proper system references");
+            Debug.Log("[SnapshotSystem] Initialized for deterministic operation");
         }
 
         protected override void OnDestroy()
@@ -89,8 +89,8 @@ namespace NoMoreEngine.Simulation.Snapshot
                 return;
             }
 
-            // Log player entity state before capture
-            LogPlayerEntityState("Before Capture");
+            // Log state before capture
+            LogSystemState("Before Capture", time.currentTick);
 
             if (snapshotManager.CaptureSnapshot(time.currentTick))
             {
@@ -110,13 +110,14 @@ namespace NoMoreEngine.Simulation.Snapshot
 
         /// <summary>
         /// Restore simulation state to a specific tick
+        /// Deterministic - only restores exact captured state, no modifications
         /// </summary>
         public bool RestoreSnapshot(uint tick)
         {
-            Debug.Log($"[SnapshotSystem] Beginning snapshot restore to tick {tick}");
+            Debug.Log($"[SnapshotSystem] Beginning deterministic snapshot restore to tick {tick}");
             
             // Log state before restore
-            LogPlayerEntityState("Before Restore");
+            LogSystemState("Before Restore", tick);
             
             if (!snapshotManager.RestoreSnapshot(tick))
             {
@@ -124,16 +125,16 @@ namespace NoMoreEngine.Simulation.Snapshot
                 return false;
             }
 
-            // Restore was successful, now handle the cleanup
+            // Snapshot restoration complete - now handle system reconnections
             
             // 1. Restore time components
             RestoreTimeComponents(tick);
             
-            // 2. Force input system to recognize the restored player entities
+            // 2. Reconnect input system (doesn't modify game state, just reconnects)
             RestorePlayerControl();
             
             // 3. Log final state
-            LogPlayerEntityState("After Restore");
+            LogSystemState("After Restore", tick);
             
             Debug.Log($"[SnapshotSystem] Successfully restored snapshot at tick {tick}");
             return true;
@@ -176,7 +177,8 @@ namespace NoMoreEngine.Simulation.Snapshot
         }
 
         /// <summary>
-        /// Restore player control after snapshot restore
+        /// Restore player control connections after snapshot restore
+        /// This only reconnects the input system, doesn't modify game state
         /// </summary>
         private void RestorePlayerControl()
         {
@@ -212,33 +214,56 @@ namespace NoMoreEngine.Simulation.Snapshot
         }
 
         /// <summary>
-        /// Helper method to log player entity state for debugging
+        /// Log system state for debugging
         /// </summary>
-        private void LogPlayerEntityState(string context)
+        private void LogSystemState(string context, uint tick)
         {
             var playerQuery = EntityManager.CreateEntityQuery(
                 ComponentType.ReadOnly<PlayerControlledTag>(),
-                ComponentType.ReadOnly<PlayerControlComponent>()
+                ComponentType.ReadOnly<PlayerControlComponent>(),
+                ComponentType.ReadOnly<FixTransformComponent>()
             );
             
-            var count = playerQuery.CalculateEntityCount();
-            Debug.Log($"[SnapshotSystem] {context}: {count} player entities exist");
+            var collisionStateQuery = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<CollisionStateComponent>()
+            );
             
-            if (count > 0)
+            var playerCount = playerQuery.CalculateEntityCount();
+            var collisionStateCount = collisionStateQuery.CalculateEntityCount();
+            
+            Debug.Log($"[SnapshotSystem] {context} at tick {tick}:");
+            Debug.Log($"  - Player entities: {playerCount}");
+            Debug.Log($"  - Entities with collision state: {collisionStateCount}");
+            
+            // Log detailed player info
+            if (playerCount > 0)
             {
                 var entities = playerQuery.ToEntityArray(Allocator.Temp);
                 var controls = playerQuery.ToComponentDataArray<PlayerControlComponent>(Allocator.Temp);
+                var transforms = playerQuery.ToComponentDataArray<FixTransformComponent>(Allocator.Temp);
                 
-                for (int i = 0; i < Mathf.Min(count, 10); i++) // Limit to 10 for log spam
+                for (int i = 0; i < Mathf.Min(playerCount, 5); i++)
                 {
-                    Debug.Log($"  - Entity {entities[i].Index}: Player {controls[i].playerIndex}");
+                    bool hasCollisionState = EntityManager.HasComponent<CollisionStateComponent>(entities[i]);
+                    string groundedInfo = "";
+                    
+                    if (hasCollisionState)
+                    {
+                        var collisionState = EntityManager.GetComponentData<CollisionStateComponent>(entities[i]);
+                        groundedInfo = $", Grounded: {collisionState.isGrounded}";
+                    }
+                    
+                    Debug.Log($"    Entity {entities[i].Index}: Player {controls[i].playerIndex}, " +
+                             $"Pos: {transforms[i].position}{groundedInfo}");
                 }
                 
                 entities.Dispose();
                 controls.Dispose();
+                transforms.Dispose();
             }
             
             playerQuery.Dispose();
+            collisionStateQuery.Dispose();
         }
 
         /// <summary>

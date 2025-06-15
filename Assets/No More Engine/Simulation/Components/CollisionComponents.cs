@@ -196,6 +196,70 @@ namespace NoMoreEngine.Simulation.Components
                 penetrationDepth, layerA, layerB);
         }
     }
+    
+    /// <summary>
+    /// Tracks collision state that must be preserved across snapshots
+    /// This ensures entities maintain proper physics state after restore
+    /// </summary>
+    [Snapshotable(Priority = 2, IncludeInHash = true)] // High priority, include in determinism hash
+    public struct CollisionStateComponent : IComponentData, ISnapshotable<CollisionStateComponent>
+    {
+        // Ground contact state
+        public bool isGrounded;
+        public fix3 groundNormal;
+        public fix3 groundContactPoint;
+        public fix timeSinceLastGrounded;
+        
+        // Collision resolution state
+        public fix3 lastResolvedPosition;
+        public fix3 lastResolvedVelocity;
+        public uint lastResolvedTick;
+        
+        // Penetration state
+        public bool wasResolvingPenetration;
+        public fix penetrationDepth;
+        public fix3 penetrationNormal;
+        
+        public static CollisionStateComponent Default => new CollisionStateComponent
+        {
+            isGrounded = false,
+            groundNormal = new fix3(fix.Zero, fix.One, fix.Zero),
+            groundContactPoint = fix3.zero,
+            timeSinceLastGrounded = fix.Zero,
+            lastResolvedPosition = fix3.zero,
+            lastResolvedVelocity = fix3.zero,
+            lastResolvedTick = 0,
+            wasResolvingPenetration = false,
+            penetrationDepth = fix.Zero,
+            penetrationNormal = fix3.zero
+        };
+        
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<CollisionStateComponent>();
+        public bool ValidateSnapshot() => true;
+    }
+
+    /// <summary>
+    /// Buffer to store collision contacts from previous frame
+    /// Must be snapshotted to maintain collision continuity
+    /// </summary>
+    [InternalBufferCapacity(4)]
+    public struct CollisionContactBuffer : IBufferElementData
+    {
+        public Entity otherEntity;
+        public fix3 contactPoint;
+        public fix3 contactNormal;
+        public fix penetration;
+        public CollisionLayer otherLayer;
+        
+        public CollisionContactBuffer(Entity other, fix3 point, fix3 normal, fix depth, CollisionLayer layer)
+        {
+            otherEntity = other;
+            contactPoint = point;
+            contactNormal = normal;
+            penetration = depth;
+            otherLayer = layer;
+        }
+    }
 
     /// <summary>
     /// Global collision layer interaction matrix
@@ -246,7 +310,7 @@ namespace NoMoreEngine.Simulation.Components
             return new CollisionLayerMatrix
             {
                 // Players collide with enemies, environment, projectiles, pickups, triggers
-                playerCollidesWith = CollisionLayer.Enemy | CollisionLayer.Environment | 
+                playerCollidesWith = CollisionLayer.Enemy | CollisionLayer.Environment |
                                    CollisionLayer.Projectile | CollisionLayer.Pickup | CollisionLayer.Trigger,
 
                 // Enemies collide with players, environment, projectiles
