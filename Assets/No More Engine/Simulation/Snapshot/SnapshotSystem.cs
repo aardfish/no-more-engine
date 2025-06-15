@@ -118,26 +118,54 @@ namespace NoMoreEngine.Simulation.Snapshot
             
             // Log state before restore
             LogSystemState("Before Restore", tick);
+
+            // 1. First destroy all game entities (but preserve critical singletons)
+            DestroyGameEntities();
             
+            //2. Restore the snapshot (includes entity remapping)
             if (!snapshotManager.RestoreSnapshot(tick))
             {
                 Debug.LogError($"[SnapshotSystem] Failed to restore snapshot for tick {tick}");
                 return false;
             }
 
-            // Snapshot restoration complete - now handle system reconnections
-            
-            // 1. Restore time components
+            // 3. Restore time components
             RestoreTimeComponents(tick);
-            
-            // 2. Reconnect input system (doesn't modify game state, just reconnects)
+
+            // 4. Ensure singletons are properly restored
+            EnsureSingletons();
+
+            // 5. Force collision state initialization
+            InitializeCollisionStates();
+
+            // 6. Reconnect input system
             RestorePlayerControl();
-            
-            // 3. Log final state
+
+            // 7. Log final state
             LogSystemState("After Restore", tick);
             
             Debug.Log($"[SnapshotSystem] Successfully restored snapshot at tick {tick}");
             return true;
+        }
+
+        private void DestroyGameEntities()
+        {
+            // Destroy all entities except critical singletons
+            var gameEntityQuery = EntityManager.CreateEntityQuery(
+                new EntityQueryDesc
+                {
+                    Any = new ComponentType[]
+                    {
+                        typeof(SimEntityTypeComponent),
+                        typeof(FixTransformComponent),
+                        typeof(SimpleMovementComponent)
+                    },
+                    Options = EntityQueryOptions.IncludeDisabledEntities
+                }
+            );
+
+            EntityManager.DestroyEntity(gameEntityQuery);
+            gameEntityQuery.Dispose();
         }
 
         /// <summary>
@@ -149,31 +177,84 @@ namespace NoMoreEngine.Simulation.Snapshot
             var timeQuery = EntityManager.CreateEntityQuery(typeof(SimulationTimeComponent));
             EntityManager.DestroyEntity(timeQuery);
             timeQuery.Dispose();
-            
+
             // Create fresh time entity
             var entity = EntityManager.CreateEntity();
             EntityManager.SetName(entity, "SimulationTime_Restored");
-            
+
             // Add time components
             EntityManager.AddComponent<TimeAccumulatorComponent>(entity);
             EntityManager.AddComponent<SimulationTimeComponent>(entity);
-            
+
             // Initialize with proper values
-            EntityManager.SetComponentData(entity, new TimeAccumulatorComponent 
-            { 
+            EntityManager.SetComponentData(entity, new TimeAccumulatorComponent
+            {
                 accumulator = 0f,
-                fixedDeltaTime = 1f/60f,
+                fixedDeltaTime = 1f / 60f,
                 maxCatchUpSteps = 3,
                 stepsLastFrame = 0
             });
-            
+
             // Set time to restored tick
             var timeComponent = SimulationTimeComponent.Create60Hz();
             timeComponent.currentTick = tick;
             timeComponent.lastConfirmedTick = tick > 0 ? tick - 1 : 0;
             timeComponent.elapsedTime = (fix)(tick / 60f); // Assuming 60Hz
-            
+
             EntityManager.SetComponentData(entity, timeComponent);
+        }
+
+        private void EnsureSingletons()
+        {
+            // Ensure collision Layer matrix exists
+            var layerMatrixQuery = EntityManager.CreateEntityQuery(typeof(CollisionLayerMatrix));
+            if (layerMatrixQuery.IsEmpty)
+            {
+                var entity = EntityManager.CreateEntity();
+                EntityManager.AddComponentData(entity, CollisionLayerMatrix.CreateDefault());
+                Debug.Log("[SnapshotSystem] Recreated CollisionLayerMatrix singleton");
+            }
+            layerMatrixQuery.Dispose();
+
+            // Ensure global gravity exists
+            var gravityQuery = EntityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
+            if (gravityQuery.IsEmpty)
+            {
+                var entity = EntityManager.CreateEntity();
+                EntityManager.AddComponentData(entity, GlobalGravityComponent.EarthGravity);
+                Debug.Log("[SnapshotSystem] Recreated GlobalGravity singleton");
+            }
+            gravityQuery.Dispose();
+        }
+
+        private void InitializeCollisionStates()
+        {
+            // CollisionStateSystem is an ISystem (struct), not ComponentSystemBase
+            // We don't need to get a reference to it - it will run automatically
+            // Just ensure the components exist
+            
+            var needsStateQuery = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<CollisionBoundsComponent>(),
+                ComponentType.ReadOnly<SimpleMovementComponent>(),
+                ComponentType.Exclude<CollisionStateComponent>()
+            );
+
+            if (!needsStateQuery.IsEmpty)
+            {
+                EntityManager.AddComponent<CollisionStateComponent>(needsStateQuery);
+
+                // Initialize with defaults
+                var entities = needsStateQuery.ToEntityArray(Allocator.Temp);
+                foreach (var entity in entities)
+                {
+                    EntityManager.SetComponentData(entity, CollisionStateComponent.Default);
+                }
+                entities.Dispose();
+
+                Debug.Log($"[SnapshotSystem] Initialized collision states for {needsStateQuery.CalculateEntityCount()} entities");
+            }
+
+            needsStateQuery.Dispose();
         }
 
         /// <summary>
@@ -187,7 +268,7 @@ namespace NoMoreEngine.Simulation.Snapshot
             {
                 inputMovementSystem.ForceReconnection();
             }
-            
+
             // Also ensure InputProcessor knows about the player entities
             var inputProcessor = InputProcessor.Instance;
             if (inputProcessor != null)
@@ -198,7 +279,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                 );
 
                 var playerEntities = playerQuery.ToEntityArray(Allocator.Temp);
-                
+
                 foreach (var playerEntity in playerEntities)
                 {
                     if (EntityManager.HasComponent<PlayerControlComponent>(playerEntity))
@@ -207,7 +288,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                         inputProcessor.RegisterPlayerEntity(playerEntity, playerControl.playerIndex);
                     }
                 }
-                
+
                 playerEntities.Dispose();
                 playerQuery.Dispose();
             }

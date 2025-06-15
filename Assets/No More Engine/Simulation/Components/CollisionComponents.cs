@@ -8,7 +8,6 @@ namespace NoMoreEngine.Simulation.Components
     /// <summary>
     /// Core collision bounds using AABB (Axis-Aligned Bounding Box)
     /// </summary>
-
     [Snapshotable(Priority = 3)]
     public struct CollisionBoundsComponent : IComponentData, ISnapshotable<CollisionBoundsComponent>
     {
@@ -58,7 +57,6 @@ namespace NoMoreEngine.Simulation.Components
     /// <summary>
     /// Defines how an entity responds to collisions
     /// </summary>
-
     [Snapshotable(Priority = 4)]
     public struct CollisionResponseComponent : IComponentData, ISnapshotable<CollisionResponseComponent>
     {
@@ -99,7 +97,6 @@ namespace NoMoreEngine.Simulation.Components
     /// Marks entities as static for collision optimization
     /// Static entities don't move and can be cached/optimized
     /// </summary>
-
     [Snapshotable(Priority = 11)]
     public struct StaticColliderComponent : IComponentData, ISnapshotable<StaticColliderComponent>
     {
@@ -144,6 +141,8 @@ namespace NoMoreEngine.Simulation.Components
     /// Buffer component to store collision events for an entity
     /// Events are cleared each frame after processing
     /// </summary>
+    [BufferSnapshotable(Priority = 20, MaxElements = 16)]
+    [InternalBufferCapacity(8)]
     public struct CollisionEventBuffer : IBufferElementData
     {
         public CollisionEvent collisionEvent;
@@ -156,6 +155,30 @@ namespace NoMoreEngine.Simulation.Components
         public static implicit operator CollisionEventBuffer(CollisionEvent collisionEvent)
         {
             return new CollisionEventBuffer { collisionEvent = collisionEvent };
+        }
+    }
+
+    /// <summary>
+    /// Buffer to store collision contacts from previous frame
+    /// Must be snapshotted to maintain collision continuity
+    /// </summary>
+    [BufferSnapshotable(Priority = 21, MaxElements = 32, RequiresEntityRemapping = true)]
+    [InternalBufferCapacity(4)]
+    public struct CollisionContactBuffer : IBufferElementData
+    {
+        public Entity otherEntity;
+        public fix3 contactPoint;
+        public fix3 contactNormal;
+        public fix penetration;
+        public CollisionLayer otherLayer;
+        
+        public CollisionContactBuffer(Entity other, fix3 point, fix3 normal, fix depth, CollisionLayer layer)
+        {
+            otherEntity = other;
+            contactPoint = point;
+            contactNormal = normal;
+            penetration = depth;
+            otherLayer = layer;
         }
     }
 
@@ -192,7 +215,7 @@ namespace NoMoreEngine.Simulation.Components
 
         public CollisionEvent ToCollisionEvent()
         {
-            return new CollisionEvent(entityA, entityB, contactPoint, contactNormal, 
+            return new CollisionEvent(entityA, entityB, contactPoint, contactNormal,
                 penetrationDepth, layerA, layerB);
         }
     }
@@ -239,33 +262,12 @@ namespace NoMoreEngine.Simulation.Components
     }
 
     /// <summary>
-    /// Buffer to store collision contacts from previous frame
-    /// Must be snapshotted to maintain collision continuity
-    /// </summary>
-    [InternalBufferCapacity(4)]
-    public struct CollisionContactBuffer : IBufferElementData
-    {
-        public Entity otherEntity;
-        public fix3 contactPoint;
-        public fix3 contactNormal;
-        public fix penetration;
-        public CollisionLayer otherLayer;
-        
-        public CollisionContactBuffer(Entity other, fix3 point, fix3 normal, fix depth, CollisionLayer layer)
-        {
-            otherEntity = other;
-            contactPoint = point;
-            contactNormal = normal;
-            penetration = depth;
-            otherLayer = layer;
-        }
-    }
-
-    /// <summary>
     /// Global collision layer interaction matrix
     /// Singleton component that defines which layers can collide with which
     /// </summary>
-    public struct CollisionLayerMatrix : IComponentData
+
+    [Snapshotable(Priority = -5, IncludeInHash = true)]
+    public struct CollisionLayerMatrix : IComponentData, ISnapshotable<CollisionLayerMatrix>
     {
         // We'll use a simple approach: each layer has a mask of what it can collide with
         // This is more cache-friendly than a full NxN matrix for small layer counts
@@ -329,6 +331,9 @@ namespace NoMoreEngine.Simulation.Components
                 triggerCollidesWith = CollisionLayer.Player | CollisionLayer.Enemy
             };
         }
+
+        public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<CollisionLayerMatrix>();
+        public bool ValidateSnapshot() => true; // Always valid, just defines layer interactions
     }
 
     /// <summary>

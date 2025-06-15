@@ -78,14 +78,20 @@ namespace NoMoreEngine.Simulation.Snapshot
         public int dataOffset;      // Offset into snapshot data buffer
         public int dataSize;        // Size of this entity's data
         public uint componentMask;  // Bit mask of which components this entity has
-        
-        public EntitySnapshot(Entity entity, int dataOffset, int dataSize, uint componentMask)
+        public int bufferDataOffset;
+        public int bufferDataSize;
+        public uint bufferMask;
+
+        public EntitySnapshot(Entity entity, int dataOffset, int dataSize, uint componentMask, int bufferDataOffset, int bufferDataSize, uint bufferMask)
         {
             this.entityIndex = entity.Index;
             this.entityVersion = entity.Version;
             this.dataOffset = dataOffset;
             this.dataSize = dataSize;
             this.componentMask = componentMask;
+            this.bufferDataOffset = bufferDataOffset;
+            this.bufferDataSize = bufferDataSize;
+            this.bufferMask = bufferMask;
         }
         
         public Entity ToEntity() => new Entity { Index = entityIndex, Version = entityVersion };
