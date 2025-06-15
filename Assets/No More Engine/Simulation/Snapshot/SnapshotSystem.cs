@@ -11,7 +11,7 @@ namespace NoMoreEngine.Simulation.Snapshot
 {
     /// <summary>
     /// ECS System that manages snapshot capture and restoration
-    /// Runs after all simulation systems to capture consistent state
+    /// Cleaned up version with proper player control restoration
     /// </summary>
     [UpdateInGroup(typeof(SimulationStepSystemGroup), OrderLast = true)]
     [UpdateAfter(typeof(CleanupPhase))]
@@ -19,6 +19,7 @@ namespace NoMoreEngine.Simulation.Snapshot
     {
         private SnapshotManager snapshotManager;
         private SimulationTimeSystem timeSystem;
+        private PlayerInputMovementSystem inputMovementSystem;
 
         // Configuration
         private bool autoSnapshot = false;
@@ -31,7 +32,7 @@ namespace NoMoreEngine.Simulation.Snapshot
 
         // Initialization tracking
         private float initializationTime = 0f;
-        private const float INITIALIZATION_DELAY = 0.1f; // Wait 100ms before allowing first snapshot
+        private const float INITIALIZATION_DELAY = 0.1f;
 
         protected override void OnCreate()
         {
@@ -39,10 +40,11 @@ namespace NoMoreEngine.Simulation.Snapshot
             snapshotManager = new SnapshotManager(World, MAX_HISTORY);
             snapshotHistory = new Queue<uint>(MAX_HISTORY);
 
-            // Get reference to time system
+            // Get references to other systems
             timeSystem = World.GetExistingSystemManaged<SimulationTimeSystem>();
+            inputMovementSystem = World.GetExistingSystemManaged<PlayerInputMovementSystem>();
 
-            Debug.Log("[SnapshotSystem] Initialized");
+            Debug.Log("[SnapshotSystem] Initialized with proper system references");
         }
 
         protected override void OnDestroy()
@@ -70,7 +72,7 @@ namespace NoMoreEngine.Simulation.Snapshot
         }
 
         /// <summary>
-        /// Manually capture a snapshot at the current tick
+        /// Capture a snapshot of the current simulation state
         /// </summary>
         public void CaptureSnapshot()
         {
@@ -87,6 +89,9 @@ namespace NoMoreEngine.Simulation.Snapshot
                 return;
             }
 
+            // Log player entity state before capture
+            LogPlayerEntityState("Before Capture");
+
             if (snapshotManager.CaptureSnapshot(time.currentTick))
             {
                 // Track snapshot history
@@ -97,16 +102,9 @@ namespace NoMoreEngine.Simulation.Snapshot
                 }
 
                 // Create metadata entity
-                var metadataEntity = EntityManager.CreateEntity();
-                EntityManager.AddComponentData(metadataEntity, new SnapshotMetadata
-                {
-                    snapshotTick = time.currentTick,
-                    snapshotHash = snapshotManager.GetSnapshotInfo(time.currentTick).hash,
-                    entityCount = snapshotManager.GetSnapshotInfo(time.currentTick).entityCount,
-                    totalDataSize = snapshotManager.GetSnapshotInfo(time.currentTick).dataSize,
-                    captureTimeMs = snapshotManager.LastCaptureTimeMs,
-                    restoreTimeMs = 0
-                });
+                CreateSnapshotMetadata(time.currentTick);
+                
+                Debug.Log($"[SnapshotSystem] Successfully captured snapshot at tick {time.currentTick}");
             }
         }
 
@@ -115,68 +113,151 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         public bool RestoreSnapshot(uint tick)
         {
-            if (snapshotManager.RestoreSnapshot(tick))
+            Debug.Log($"[SnapshotSystem] Beginning snapshot restore to tick {tick}");
+            
+            // Log state before restore
+            LogPlayerEntityState("Before Restore");
+            
+            if (!snapshotManager.RestoreSnapshot(tick))
             {
-                // First, destroy any existing time entities
-                var timeQuery = EntityManager.CreateEntityQuery(typeof(SimulationTimeComponent));
-                EntityManager.DestroyEntity(timeQuery);
-                timeQuery.Dispose();
-                
-                // Create new time entity
-                var entity = EntityManager.CreateEntity();
-                EntityManager.AddComponent<TimeAccumulatorComponent>(entity);
-                EntityManager.AddComponent<SimulationTimeComponent>(entity);
-                
-                // Reset accumulator to 0 to ensure next frame processes correctly
-                EntityManager.SetComponentData(entity, new TimeAccumulatorComponent 
-                { 
-                    accumulator = 0f,
-                    fixedDeltaTime = 1f/60f
-                });
-                
-                // Set current tick from snapshot
-                EntityManager.SetComponentData(entity, new SimulationTimeComponent 
-                { 
-                    currentTick = tick,
-                    lastConfirmedTick = tick - 1
-                });
+                Debug.LogError($"[SnapshotSystem] Failed to restore snapshot for tick {tick}");
+                return false;
+            }
 
-                // Find and reconnect player controlled entities to input system
+            // Restore was successful, now handle the cleanup
+            
+            // 1. Restore time components
+            RestoreTimeComponents(tick);
+            
+            // 2. Force input system to recognize the restored player entities
+            RestorePlayerControl();
+            
+            // 3. Log final state
+            LogPlayerEntityState("After Restore");
+            
+            Debug.Log($"[SnapshotSystem] Successfully restored snapshot at tick {tick}");
+            return true;
+        }
+
+        /// <summary>
+        /// Restore time components after snapshot restore
+        /// </summary>
+        private void RestoreTimeComponents(uint tick)
+        {
+            // Destroy existing time entities
+            var timeQuery = EntityManager.CreateEntityQuery(typeof(SimulationTimeComponent));
+            EntityManager.DestroyEntity(timeQuery);
+            timeQuery.Dispose();
+            
+            // Create fresh time entity
+            var entity = EntityManager.CreateEntity();
+            EntityManager.SetName(entity, "SimulationTime_Restored");
+            
+            // Add time components
+            EntityManager.AddComponent<TimeAccumulatorComponent>(entity);
+            EntityManager.AddComponent<SimulationTimeComponent>(entity);
+            
+            // Initialize with proper values
+            EntityManager.SetComponentData(entity, new TimeAccumulatorComponent 
+            { 
+                accumulator = 0f,
+                fixedDeltaTime = 1f/60f,
+                maxCatchUpSteps = 3,
+                stepsLastFrame = 0
+            });
+            
+            // Set time to restored tick
+            var timeComponent = SimulationTimeComponent.Create60Hz();
+            timeComponent.currentTick = tick;
+            timeComponent.lastConfirmedTick = tick > 0 ? tick - 1 : 0;
+            timeComponent.elapsedTime = (fix)(tick / 60f); // Assuming 60Hz
+            
+            EntityManager.SetComponentData(entity, timeComponent);
+        }
+
+        /// <summary>
+        /// Restore player control after snapshot restore
+        /// </summary>
+        private void RestorePlayerControl()
+        {
+            // Force the input movement system to reconnect
+            if (inputMovementSystem != null)
+            {
+                inputMovementSystem.ForceReconnection();
+            }
+            
+            // Also ensure InputProcessor knows about the player entities
+            var inputProcessor = InputProcessor.Instance;
+            if (inputProcessor != null)
+            {
                 var playerQuery = EntityManager.CreateEntityQuery(
                     ComponentType.ReadOnly<PlayerControlledTag>(),
                     ComponentType.ReadOnly<PlayerControlComponent>()
                 );
 
-                var inputProcessor = InputProcessor.Instance;
-                if (inputProcessor != null)
+                var playerEntities = playerQuery.ToEntityArray(Allocator.Temp);
+                
+                foreach (var playerEntity in playerEntities)
                 {
-                    var playerEntities = playerQuery.ToEntityArray(Allocator.Temp);
-                    Debug.Log($"[SnapshotSystem] Found {playerEntities.Length} player controlled entities after restore");
-                    
-                    foreach (var playerEntity in playerEntities)
+                    if (EntityManager.HasComponent<PlayerControlComponent>(playerEntity))
                     {
-                        var playerIndex = EntityManager.GetComponentData<PlayerControlComponent>(playerEntity).playerIndex;
-                        Debug.Log($"[SnapshotSystem] Restoring control for player {playerIndex} on entity {playerEntity.Index}");
-                        
-                        // Verify components exist
-                        bool hasControl = EntityManager.HasComponent<PlayerControlComponent>(playerEntity);
-                        bool hasTag = EntityManager.HasComponent<PlayerControlledTag>(playerEntity);
-                        Debug.Log($"[SnapshotSystem] Entity {playerEntity.Index} has Control: {hasControl}, Tag: {hasTag}");
-                        
-                        inputProcessor.RegisterPlayerEntity(playerEntity, playerIndex);
+                        var playerControl = EntityManager.GetComponentData<PlayerControlComponent>(playerEntity);
+                        inputProcessor.RegisterPlayerEntity(playerEntity, playerControl.playerIndex);
                     }
-                    playerEntities.Dispose();
                 }
-                else
-                {
-                    Debug.LogError("[SnapshotSystem] Could not find InputProcessor instance!");
-                }
+                
+                playerEntities.Dispose();
                 playerQuery.Dispose();
-
-                Debug.Log($"[SnapshotSystem] Restored snapshot at tick {tick} and recreated time components");
-                return true;
             }
-            return false;
+        }
+
+        /// <summary>
+        /// Helper method to log player entity state for debugging
+        /// </summary>
+        private void LogPlayerEntityState(string context)
+        {
+            var playerQuery = EntityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PlayerControlledTag>(),
+                ComponentType.ReadOnly<PlayerControlComponent>()
+            );
+            
+            var count = playerQuery.CalculateEntityCount();
+            Debug.Log($"[SnapshotSystem] {context}: {count} player entities exist");
+            
+            if (count > 0)
+            {
+                var entities = playerQuery.ToEntityArray(Allocator.Temp);
+                var controls = playerQuery.ToComponentDataArray<PlayerControlComponent>(Allocator.Temp);
+                
+                for (int i = 0; i < Mathf.Min(count, 10); i++) // Limit to 10 for log spam
+                {
+                    Debug.Log($"  - Entity {entities[i].Index}: Player {controls[i].playerIndex}");
+                }
+                
+                entities.Dispose();
+                controls.Dispose();
+            }
+            
+            playerQuery.Dispose();
+        }
+
+        /// <summary>
+        /// Create snapshot metadata entity
+        /// </summary>
+        private void CreateSnapshotMetadata(uint tick)
+        {
+            var metadataEntity = EntityManager.CreateEntity();
+            EntityManager.SetName(metadataEntity, $"SnapshotMetadata_Tick{tick}");
+            
+            EntityManager.AddComponentData(metadataEntity, new SnapshotMetadata
+            {
+                snapshotTick = tick,
+                snapshotHash = snapshotManager.GetSnapshotInfo(tick).hash,
+                entityCount = snapshotManager.GetSnapshotInfo(tick).entityCount,
+                totalDataSize = snapshotManager.GetSnapshotInfo(tick).dataSize,
+                captureTimeMs = snapshotManager.LastCaptureTimeMs,
+                restoreTimeMs = 0
+            });
         }
 
         /// <summary>
