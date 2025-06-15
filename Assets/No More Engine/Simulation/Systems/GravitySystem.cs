@@ -10,7 +10,6 @@ namespace NoMoreEngine.Simulation.Systems
     /// Now uses deterministic time from SimulationTimeComponent
     /// </summary>
     [UpdateInGroup(typeof(PhysicsPhase))]
-    [BurstCompile]
     public partial struct GravitySystem : ISystem
     {
         private EntityQuery globalGravityQuery;

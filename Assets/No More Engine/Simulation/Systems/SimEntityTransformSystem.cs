@@ -7,7 +7,7 @@ namespace NoMoreEngine.Simulation.Systems
     [UpdateInGroup(typeof(PhysicsPhase))]
     public partial struct SimEntityTransformSystem : ISystem
     {
-        [BurstCompile]
+        //[BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
             //placeholder

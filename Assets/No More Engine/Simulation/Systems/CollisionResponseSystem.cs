@@ -82,7 +82,6 @@ namespace NoMoreEngine.Simulation.Systems
 
                     if (++processedCollisions > MAX_COLLISIONS_PER_FRAME)
                     {
-                        UnityEngine.Debug.LogWarning($"Collision response limit reached: {MAX_COLLISIONS_PER_FRAME}");
                         break;
                     }
 

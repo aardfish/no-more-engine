@@ -13,7 +13,6 @@ namespace NoMoreEngine.Simulation.Systems
     [UpdateInGroup(typeof(PhysicsPhase))]
     [UpdateAfter(typeof(CollisionResponseSystem))]
     [UpdateBefore(typeof(SimEntityTransformSystem))]
-    [BurstCompile]
     public partial struct CollisionStateSystem : ISystem
     {
         private EntityQuery uninitializedEntitiesQuery;

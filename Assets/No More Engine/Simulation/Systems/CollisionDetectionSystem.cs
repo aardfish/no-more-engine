@@ -14,7 +14,6 @@ namespace NoMoreEngine.Simulation.Systems
     [UpdateInGroup(typeof(PhysicsPhase))]
     [UpdateAfter(typeof(SimpleMovementSystem))]
     [UpdateBefore(typeof(CollisionResponseSystem))]
-    [BurstCompile]
     public partial struct CollisionDetectionSystem : ISystem
     {
         private EntityQuery dynamicCollidersQuery;
