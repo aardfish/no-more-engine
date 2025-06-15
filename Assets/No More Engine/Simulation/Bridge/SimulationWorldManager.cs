@@ -1,4 +1,5 @@
 using NoMoreEngine.Simulation.Components;
+using NoMoreEngine.Simulation.Systems;
 using Unity.Collections;
 using Unity.Entities;
 using UnityEngine;
@@ -236,30 +237,7 @@ namespace NoMoreEngine.Simulation.Bridge
         public void SetGlobalGravityScale(fix scale)
         {
             if (!IsInitialized) return;
-
-            var gravityQuery = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
-
-            if (!gravityQuery.IsEmpty)
-            {
-                var entities = gravityQuery.ToEntityArray(Allocator.Temp);
-                if (entities.Length > 0)
-                {
-                    var gravity = entityManager.GetComponentData<GlobalGravityComponent>(entities[0]);
-                    gravity.gravityScale = scale;
-                    entityManager.SetComponentData(entities[0], gravity);
-                }
-                entities.Dispose();
-            }
-            else
-            {
-                // Create gravity component if it doesn't exist
-                var entity = entityManager.CreateEntity();
-                var gravity = GlobalGravityComponent.EarthGravity;
-                gravity.gravityScale = scale;
-                entityManager.AddComponentData(entity, gravity);
-            }
-
-            gravityQuery.Dispose();
+            GravityUtility.SetGlobalGravityScale(entityManager, scale);
         }
 
         /// <summary>
@@ -268,30 +246,7 @@ namespace NoMoreEngine.Simulation.Bridge
         public void SetGlobalGravityEnabled(bool enabled)
         {
             if (!IsInitialized) return;
-
-            var gravityQuery = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
-
-            if (!gravityQuery.IsEmpty)
-            {
-                var entities = gravityQuery.ToEntityArray(Allocator.Temp);
-                if (entities.Length > 0)
-                {
-                    var gravity = entityManager.GetComponentData<GlobalGravityComponent>(entities[0]);
-                    gravity.enabled = enabled;
-                    entityManager.SetComponentData(entities[0], gravity);
-                }
-                entities.Dispose();
-            }
-            else
-            {
-                // Create gravity component if it doesn't exist
-                var entity = entityManager.CreateEntity();
-                var gravity = GlobalGravityComponent.EarthGravity;
-                gravity.enabled = enabled;
-                entityManager.AddComponentData(entity, gravity);
-            }
-
-            gravityQuery.Dispose();
+            GravityUtility.SetGlobalGravityEnabled(entityManager, enabled);
         }
 
         /// <summary>
@@ -300,26 +255,7 @@ namespace NoMoreEngine.Simulation.Bridge
         public void SetGlobalGravity(GlobalGravityComponent newGravity)
         {
             if (!IsInitialized) return;
-
-            var gravityQuery = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
-
-            if (!gravityQuery.IsEmpty)
-            {
-                var entities = gravityQuery.ToEntityArray(Allocator.Temp);
-                if (entities.Length > 0)
-                {
-                    entityManager.SetComponentData(entities[0], newGravity);
-                }
-                entities.Dispose();
-            }
-            else
-            {
-                // Create gravity component if it doesn't exist
-                var entity = entityManager.CreateEntity();
-                entityManager.AddComponentData(entity, newGravity);
-            }
-
-            gravityQuery.Dispose();
+            GravityUtility.SetGlobalGravity(entityManager, newGravity);
         }
 
         /// <summary>

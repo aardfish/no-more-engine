@@ -3,7 +3,6 @@ using Unity.Burst;
 using static fixMath;
 using NoMoreEngine.Simulation.Components;
 
-
 namespace NoMoreEngine.Simulation.Systems
 {
     /// <summary>
@@ -11,6 +10,7 @@ namespace NoMoreEngine.Simulation.Systems
     /// Now uses deterministic time from SimulationTimeComponent
     /// </summary>
     [UpdateInGroup(typeof(PhysicsPhase))]
+    [BurstCompile]
     public partial struct GravitySystem : ISystem
     {
         private EntityQuery globalGravityQuery;
@@ -33,6 +33,7 @@ namespace NoMoreEngine.Simulation.Systems
             state.RequireForUpdate<SimulationTimeComponent>();
         }
 
+        [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
             // Ensure global gravity exists
@@ -87,26 +88,32 @@ namespace NoMoreEngine.Simulation.Systems
             var entity = state.EntityManager.CreateEntity();
             state.EntityManager.AddComponentData(entity, GlobalGravityComponent.EarthGravity);
         }
+    }
 
+    /// <summary>
+    /// Utility class for gravity manipulation - separated from the system
+    /// These methods can be called from managed code (SystemBase) only
+    /// </summary>
+    public static class GravityUtility
+    {
         /// <summary>
-        /// Public method to update global gravity settings
-        /// Can be called by other systems or debug tools
+        /// Set global gravity settings
         /// </summary>
-        public static void SetGlobalGravity(ref SystemState state, GlobalGravityComponent newGravity)
+        public static void SetGlobalGravity(EntityManager entityManager, GlobalGravityComponent newGravity)
         {
-            var query = state.EntityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
+            var query = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
 
             if (query.IsEmpty)
             {
-                var entity = state.EntityManager.CreateEntity();
-                state.EntityManager.AddComponentData(entity, newGravity);
+                var entity = entityManager.CreateEntity();
+                entityManager.AddComponentData(entity, newGravity);
             }
             else
             {
                 var entities = query.ToEntityArray(Unity.Collections.Allocator.Temp);
                 if (entities.Length > 0)
                 {
-                    state.EntityManager.SetComponentData(entities[0], newGravity);
+                    entityManager.SetComponentData(entities[0], newGravity);
                 }
                 entities.Dispose();
             }
@@ -115,21 +122,20 @@ namespace NoMoreEngine.Simulation.Systems
         }
 
         /// <summary>
-        /// Public method to modify global gravity scale
-        /// Useful for gameplay effects (low gravity zones, etc.)
+        /// Modify global gravity scale
         /// </summary>
-        public static void SetGlobalGravityScale(ref SystemState state, fix newScale)
+        public static void SetGlobalGravityScale(EntityManager entityManager, fix newScale)
         {
-            var query = state.EntityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
+            var query = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
 
             if (!query.IsEmpty)
             {
                 var entities = query.ToEntityArray(Unity.Collections.Allocator.Temp);
                 if (entities.Length > 0)
                 {
-                    var gravity = state.EntityManager.GetComponentData<GlobalGravityComponent>(entities[0]);
+                    var gravity = entityManager.GetComponentData<GlobalGravityComponent>(entities[0]);
                     gravity.gravityScale = newScale;
-                    state.EntityManager.SetComponentData(entities[0], gravity);
+                    entityManager.SetComponentData(entities[0], gravity);
                 }
                 entities.Dispose();
             }
@@ -138,20 +144,20 @@ namespace NoMoreEngine.Simulation.Systems
         }
 
         /// <summary>
-        /// Public method to enable/disable global gravity
+        /// Enable/disable global gravity
         /// </summary>
-        public static void SetGlobalGravityEnabled(ref SystemState state, bool enabled)
+        public static void SetGlobalGravityEnabled(EntityManager entityManager, bool enabled)
         {
-            var query = state.EntityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
+            var query = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
 
             if (!query.IsEmpty)
             {
                 var entities = query.ToEntityArray(Unity.Collections.Allocator.Temp);
                 if (entities.Length > 0)
                 {
-                    var gravity = state.EntityManager.GetComponentData<GlobalGravityComponent>(entities[0]);
+                    var gravity = entityManager.GetComponentData<GlobalGravityComponent>(entities[0]);
                     gravity.enabled = enabled;
-                    state.EntityManager.SetComponentData(entities[0], gravity);
+                    entityManager.SetComponentData(entities[0], gravity);
                 }
                 entities.Dispose();
             }

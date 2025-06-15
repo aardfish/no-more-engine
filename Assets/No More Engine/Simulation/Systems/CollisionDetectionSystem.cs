@@ -4,7 +4,6 @@ using Unity.Collections;
 using Unity.Jobs;
 using NoMoreEngine.Simulation.Components;
 
-
 namespace NoMoreEngine.Simulation.Systems
 {
     /// <summary>
@@ -15,7 +14,6 @@ namespace NoMoreEngine.Simulation.Systems
     [UpdateInGroup(typeof(PhysicsPhase))]
     [UpdateAfter(typeof(SimpleMovementSystem))]
     [UpdateBefore(typeof(CollisionResponseSystem))]
-
     [BurstCompile]
     public partial struct CollisionDetectionSystem : ISystem
     {
@@ -181,7 +179,14 @@ namespace NoMoreEngine.Simulation.Systems
                 }
             }
         }
+    }
 
+    /// <summary>
+    /// Burst-compiled collision utilities
+    /// </summary>
+    [BurstCompile]
+    public static class CollisionUtility
+    {
         /// <summary>
         /// Test AABB collision between two entities
         /// </summary>
@@ -285,7 +290,7 @@ namespace NoMoreEngine.Simulation.Systems
                     continue;
 
                 // Test AABB collision
-                if (CollisionDetectionSystem.TestAABBCollision(
+                if (CollisionUtility.TestAABBCollision(
                     dynamicTransform, dynamicBounds,
                     staticTransforms[i], staticBounds[i],
                     out CollisionCandidate collision))
@@ -336,7 +341,7 @@ namespace NoMoreEngine.Simulation.Systems
                         continue;
 
                     // Test AABB collision
-                    if (CollisionDetectionSystem.TestAABBCollision(
+                    if (CollisionUtility.TestAABBCollision(
                         dynamicTransforms[i], dynamicBounds[i],
                         dynamicTransforms[j], dynamicBounds[j],
                         out CollisionCandidate collision))

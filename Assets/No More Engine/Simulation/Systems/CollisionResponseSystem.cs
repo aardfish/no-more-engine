@@ -4,7 +4,6 @@ using Unity.Collections;
 using static fixMath;
 using NoMoreEngine.Simulation.Components;
 
-
 namespace NoMoreEngine.Simulation.Systems
 {
     /// <summary>
@@ -15,7 +14,6 @@ namespace NoMoreEngine.Simulation.Systems
     [UpdateInGroup(typeof(PhysicsPhase))]
     [UpdateAfter(typeof(CollisionDetectionSystem))]
     [UpdateBefore(typeof(SimEntityTransformSystem))]
-
     [BurstCompile]
     public partial struct CollisionResponseSystem : ISystem
     {
@@ -56,17 +54,17 @@ namespace NoMoreEngine.Simulation.Systems
                     switch (response.ValueRO.responseType)
                     {
                         case CollisionResponse.Stop:
-                            HandleStopResponse(ref transform.ValueRW, ref movement.ValueRW,
+                            CollisionResponseUtility.HandleStopResponse(ref transform.ValueRW, ref movement.ValueRW,
                                 in contactNormal, in collisionEvent.penetrationDepth);
                             break;
 
                         case CollisionResponse.Slide:
-                            HandleSlideResponse(ref transform.ValueRW, ref movement.ValueRW,
+                            CollisionResponseUtility.HandleSlideResponse(ref transform.ValueRW, ref movement.ValueRW,
                                 in contactNormal, in collisionEvent.penetrationDepth, in response.ValueRO.friction);
                             break;
 
                         case CollisionResponse.Bounce:
-                            HandleBounceResponse(ref transform.ValueRW, ref movement.ValueRW,
+                            CollisionResponseUtility.HandleBounceResponse(ref transform.ValueRW, ref movement.ValueRW,
                                 in contactNormal, in collisionEvent.penetrationDepth, in response.ValueRO.bounciness);
                             break;
 
@@ -92,12 +90,19 @@ namespace NoMoreEngine.Simulation.Systems
                 }
             }
         }
+    }
 
+    /// <summary>
+    /// Burst-compiled collision response utilities
+    /// </summary>
+    [BurstCompile]
+    public static class CollisionResponseUtility
+    {
         /// <summary>
         /// Stop response: Move entity out of collision and stop movement
         /// </summary>
         [BurstCompile]
-        private static void HandleStopResponse(ref FixTransformComponent transform,
+        public static void HandleStopResponse(ref FixTransformComponent transform,
             ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth)
         {
             // Position correction: move entity out of collision
@@ -125,7 +130,7 @@ namespace NoMoreEngine.Simulation.Systems
         /// Slide response: Move entity out of collision and slide along surface
         /// </summary>
         [BurstCompile]
-        private static void HandleSlideResponse(ref FixTransformComponent transform,
+        public static void HandleSlideResponse(ref FixTransformComponent transform,
             ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth, in fix friction)
         {
             // Position correction: move entity out of collision
@@ -158,7 +163,7 @@ namespace NoMoreEngine.Simulation.Systems
         /// Bounce response: Move entity out of collision and reflect velocity
         /// </summary>
         [BurstCompile]
-        private static void HandleBounceResponse(ref FixTransformComponent transform,
+        public static void HandleBounceResponse(ref FixTransformComponent transform,
             ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth, in fix bounciness)
         {
             // Position correction: move entity out of collision
