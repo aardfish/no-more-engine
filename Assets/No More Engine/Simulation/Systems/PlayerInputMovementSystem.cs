@@ -67,9 +67,11 @@ namespace NoMoreEngine.Simulation.Systems
         protected override void OnUpdate()
         {
             // Retry connection if needed
-            if (inputSerializer == null)
+            if (inputSerializer == null || !inputSerializer.enabled)
             {
                 TryConnectToInputSerializer();
+                // If still null after trying, skip this frame
+                if (inputSerializer == null) return;
             }
 
             if (!hasInput) return;

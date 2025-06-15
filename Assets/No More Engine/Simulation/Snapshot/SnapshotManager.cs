@@ -225,6 +225,14 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         private unsafe void CaptureEntities(ref SimulationSnapshot snapshot)
         {
+            // Add debug logging at start
+            var playerQuery = entityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PlayerControlledTag>(),
+                ComponentType.ReadOnly<PlayerControlComponent>()
+            );
+            Debug.Log($"[SnapshotManager] Found {playerQuery.CalculateEntityCount()} player entities during capture");
+            playerQuery.Dispose();
+
             var entities = snapshotQuery.ToEntityArray(Allocator.Temp);
             var dataPtr = (byte*)snapshot.data.GetUnsafePtr();
             int currentOffset = 0;
@@ -248,14 +256,12 @@ namespace NoMoreEngine.Simulation.Snapshot
                     
                     if (entityManager.HasComponent(entity, snapshotType.componentType))
                     {
-                        // Mark component as present
+                        // Mark component as present in mask
                         componentMask |= (1u << i);
                         
-                        // Skip zero-sized components
+                        // Skip data copying for zero-sized components
                         if (snapshotType.size == 0)
-                        {
-                            continue; // Don't try to copy data for tag components
-                        }
+                            continue;
                         
                         // Get handler for this component type
                         if (!snapshotHandlers.TryGetValue(snapshotType.managedType, out var handler))
@@ -264,7 +270,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                             continue;
                         }
                         
-                        // Copy component data using handler
+                        // Only copy data and advance offset for non-zero sized components
                         handler.CopyToSnapshot(entityManager, entity, (IntPtr)(dataPtr + currentOffset));
                         currentOffset += snapshotType.size;
                     }
@@ -327,6 +333,14 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         private unsafe void RestoreEntities(ref SimulationSnapshot snapshot)
         {
+            // Add debug count before restoration
+            var beforePlayerQuery = entityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PlayerControlledTag>(),
+                ComponentType.ReadOnly<PlayerControlComponent>()
+            );
+            Debug.Log($"[SnapshotManager] Player entities before restore: {beforePlayerQuery.CalculateEntityCount()}");
+            beforePlayerQuery.Dispose();
+
             var dataPtr = (byte*)snapshot.data.GetUnsafeReadOnlyPtr();
             
             // Create all entities first
@@ -347,7 +361,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                     {
                         var snapshotType = snapshotTypes[typeIndex];
                         
-                        // Add component if not present
+                        // Add component regardless of size
                         if (!entityManager.HasComponent(entity, snapshotType.componentType))
                         {
                             entityManager.AddComponent(entity, snapshotType.componentType);
@@ -355,19 +369,17 @@ namespace NoMoreEngine.Simulation.Snapshot
                         
                         // Skip data restoration for zero-sized components
                         if (snapshotType.size == 0)
-                        {
-                            continue; // Tag components don't have data to restore
-                        }
+                            continue;
                         
                         // Get handler for this component type
                         if (!snapshotHandlers.TryGetValue(snapshotType.managedType, out var handler))
                         {
                             Debug.LogWarning($"[SnapshotManager] No handler found for type {snapshotType.managedType.Name}");
-                            dataOffset += snapshotType.size; // Still need to advance offset
+                            dataOffset += snapshotType.size;
                             continue;
                         }
                         
-                        // Restore component data using handler
+                        // Only copy data and advance offset for non-zero sized components
                         handler.CopyFromSnapshot(entityManager, entity, (IntPtr)(dataPtr + dataOffset));
                         dataOffset += snapshotType.size;
                     }
@@ -375,6 +387,14 @@ namespace NoMoreEngine.Simulation.Snapshot
             }
             
             newEntities.Dispose();
+
+            // Add debug count after restoration
+            var afterPlayerQuery = entityManager.CreateEntityQuery(
+                ComponentType.ReadOnly<PlayerControlledTag>(),
+                ComponentType.ReadOnly<PlayerControlComponent>()
+            );
+            Debug.Log($"[SnapshotManager] Player entities after restore: {afterPlayerQuery.CalculateEntityCount()}");
+            afterPlayerQuery.Dispose();
         }
         
         /// <summary>
@@ -510,7 +530,6 @@ namespace NoMoreEngine.Simulation.Snapshot
     public class ComponentSnapshotHandler<T> : IComponentSnapshotHandler where T : unmanaged, IComponentData
     {
         private readonly int componentSize;
-        private readonly bool isZeroSized;
         
         public ComponentSnapshotHandler()
         {
@@ -518,25 +537,20 @@ namespace NoMoreEngine.Simulation.Snapshot
             try
             {
                 componentSize = UnsafeUtility.SizeOf<T>();
-                isZeroSized = false;
             }
             catch
             {
                 // Zero-sized component (tag)
                 componentSize = 0;
-                isZeroSized = true;
             }
         }
         
         public unsafe void CopyToSnapshot(EntityManager entityManager, Entity entity, IntPtr destination)
         {
-            // Handle zero-sized components (tags)
-            if (isZeroSized || componentSize == 0)
-            {
-                // Nothing to copy for tag components
+            // Skip data copying for zero-sized components (tags)
+            if (componentSize == 0)
                 return;
-            }
-            
+                
             try
             {
                 var component = entityManager.GetComponentData<T>(entity);
@@ -544,20 +558,20 @@ namespace NoMoreEngine.Simulation.Snapshot
             }
             catch (Exception e)
             {
-                Debug.LogError($"[SnapshotHandler] Failed to copy component {typeof(T).Name}: {e.Message}");
+                if (!typeof(T).Name.EndsWith("Tag"))
+                {
+                    // Only log error for non-tag components
+                    Debug.LogError($"[SnapshotHandler] Failed to copy component {typeof(T).Name}: {e.Message}");
+                }
             }
         }
         
         public unsafe void CopyFromSnapshot(EntityManager entityManager, Entity entity, IntPtr source)
         {
-            // Handle zero-sized components (tags)
-            if (isZeroSized || componentSize == 0)
-            {
-                // For tag components, we just need to ensure they exist
-                // The component was already added, so nothing more to do
+            // Skip data copying for zero-sized components (tags)
+            if (componentSize == 0)
                 return;
-            }
-            
+                
             try
             {
                 var component = default(T);
@@ -566,7 +580,11 @@ namespace NoMoreEngine.Simulation.Snapshot
             }
             catch (Exception e)
             {
-                Debug.LogError($"[SnapshotHandler] Failed to restore component {typeof(T).Name}: {e.Message}");
+                if (!typeof(T).Name.EndsWith("Tag"))
+                {
+                    // Only log error for non-tag components
+                    Debug.LogError($"[SnapshotHandler] Failed to restore component {typeof(T).Name}: {e.Message}");
+                }
             }
         }
     }

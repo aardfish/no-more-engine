@@ -1,5 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
+using System.Linq;
+using Unity.Entities;
 
 
 namespace NoMoreEngine.Input
@@ -134,6 +136,22 @@ namespace NoMoreEngine.Input
             int framesToCheck = Mathf.CeilToInt(timeWindow * 60f); // Assuming 60fps
             return playerStates[playerIndex].WasButtonPressedInLastFrames(button, framesToCheck);
         }
+
+        // Remove these fields - we don't need to track entities here
+        // private Dictionary<byte, Entity> playerEntities = new Dictionary<byte, Entity>();
+        // private Dictionary<Entity, byte> entityToPlayer = new Dictionary<Entity, byte>();
+
+        // Simplify RegisterPlayerEntity to just handle input state
+        public void RegisterPlayerEntity(Entity entity, byte playerIndex)
+        {
+            if (!playerStates.ContainsKey(playerIndex))
+            {
+                Debug.Log($"[InputProcessor] Creating new input state for player {playerIndex}");
+                playerStates[playerIndex] = new PlayerInputState(playerIndex, inputHistorySize);
+            }
+            
+            Debug.Log($"[InputProcessor] Input state ready for player {playerIndex}");
+        }   
 
         private string GetButtonNames(ushort buttonMask)
         {

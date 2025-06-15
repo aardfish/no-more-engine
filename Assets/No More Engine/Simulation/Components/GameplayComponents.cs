@@ -19,7 +19,9 @@ namespace NoMoreEngine.Simulation.Components
     /// <summary>
     /// Component to track which player index controls an entity
     /// </summary>
-    public struct PlayerControlComponent : IComponentData
+
+    [Snapshotable(Priority = 11)]
+    public struct PlayerControlComponent : IComponentData, ISnapshotable<PlayerControlComponent>
     {
         public byte playerIndex; // 0-3 for P1-P4
 
@@ -27,6 +29,9 @@ namespace NoMoreEngine.Simulation.Components
         {
             playerIndex = index;
         }
+
+        public int GetSnapshotSize() => sizeof(byte);
+        public bool ValidateSnapshot() => true;
     }
 
     /// <summary>

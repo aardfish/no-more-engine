@@ -1,9 +1,11 @@
 using Unity.Entities;
 using Unity.Burst;
 using UnityEngine;
+using Unity.Collections;
 using NoMoreEngine.Simulation.Components;
 using System.Collections.Generic;
 using NoMoreEngine.Simulation.Systems;
+using NoMoreEngine.Input;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
@@ -115,28 +117,65 @@ namespace NoMoreEngine.Simulation.Snapshot
         {
             if (snapshotManager.RestoreSnapshot(tick))
             {
-                // Note: SimulationTimeComponent is restored automatically as part of the snapshot
-                // We just need to reset the accumulator to prevent time jumps
+                // First, destroy any existing time entities
+                var timeQuery = EntityManager.CreateEntityQuery(typeof(SimulationTimeComponent));
+                EntityManager.DestroyEntity(timeQuery);
+                timeQuery.Dispose();
+                
+                // Create new time entity
+                var entity = EntityManager.CreateEntity();
+                EntityManager.AddComponent<TimeAccumulatorComponent>(entity);
+                EntityManager.AddComponent<SimulationTimeComponent>(entity);
+                
+                // Reset accumulator to 0 to ensure next frame processes correctly
+                EntityManager.SetComponentData(entity, new TimeAccumulatorComponent 
+                { 
+                    accumulator = 0f,
+                    fixedDeltaTime = 1f/60f
+                });
+                
+                // Set current tick from snapshot
+                EntityManager.SetComponentData(entity, new SimulationTimeComponent 
+                { 
+                    currentTick = tick,
+                    lastConfirmedTick = tick - 1
+                });
 
-                if (SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
+                // Find and reconnect player controlled entities to input system
+                var playerQuery = EntityManager.CreateEntityQuery(
+                    ComponentType.ReadOnly<PlayerControlledTag>(),
+                    ComponentType.ReadOnly<PlayerControlComponent>()
+                );
+
+                var inputProcessor = InputProcessor.Instance;
+                if (inputProcessor != null)
                 {
-                    accumulator.Reset(); // Reset to prevent accumulated time from causing multiple steps
-                    SystemAPI.SetSingleton(accumulator);
+                    var playerEntities = playerQuery.ToEntityArray(Allocator.Temp);
+                    Debug.Log($"[SnapshotSystem] Found {playerEntities.Length} player controlled entities after restore");
+                    
+                    foreach (var playerEntity in playerEntities)
+                    {
+                        var playerIndex = EntityManager.GetComponentData<PlayerControlComponent>(playerEntity).playerIndex;
+                        Debug.Log($"[SnapshotSystem] Restoring control for player {playerIndex} on entity {playerEntity.Index}");
+                        
+                        // Verify components exist
+                        bool hasControl = EntityManager.HasComponent<PlayerControlComponent>(playerEntity);
+                        bool hasTag = EntityManager.HasComponent<PlayerControlledTag>(playerEntity);
+                        Debug.Log($"[SnapshotSystem] Entity {playerEntity.Index} has Control: {hasControl}, Tag: {hasTag}");
+                        
+                        inputProcessor.RegisterPlayerEntity(playerEntity, playerIndex);
+                    }
+                    playerEntities.Dispose();
                 }
-
-                // Update metadata
-                var metadataQuery = GetEntityQuery(typeof(SnapshotMetadata));
-                if (!metadataQuery.IsEmpty)
+                else
                 {
-                    var metadata = metadataQuery.GetSingleton<SnapshotMetadata>();
-                    metadata.restoreTimeMs = snapshotManager.LastRestoreTimeMs;
-                    metadataQuery.SetSingleton(metadata);
+                    Debug.LogError("[SnapshotSystem] Could not find InputProcessor instance!");
                 }
+                playerQuery.Dispose();
 
-                Debug.Log($"[SnapshotSystem] Restored to tick {tick}");
+                Debug.Log($"[SnapshotSystem] Restored snapshot at tick {tick} and recreated time components");
                 return true;
             }
-
             return false;
         }
 

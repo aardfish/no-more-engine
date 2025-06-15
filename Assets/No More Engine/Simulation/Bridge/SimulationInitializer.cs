@@ -354,8 +354,14 @@ namespace NoMoreEngine.Simulation.Bridge
             {
                 // Tag for player input system
                 entityManager.AddComponent<PlayerControlledTag>(entity);
-
-                // TODO: Add component to track which player index controls this entity
+                
+                // Add player control component with index
+                entityManager.AddComponentData(entity, new PlayerControlComponent
+                {
+                    playerIndex = (byte)slot.slotIndex
+                });
+                
+                Debug.Log($"[SimulationInit] Added player control components for P{slot.slotIndex + 1}");
             }
             else if (slot.IsBot)
             {
