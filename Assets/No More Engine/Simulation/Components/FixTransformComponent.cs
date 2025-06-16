@@ -1,5 +1,6 @@
 using NoMoreEngine.Simulation.Snapshot;
 using Unity.Entities;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.Simulation.Components

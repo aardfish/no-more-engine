@@ -1,5 +1,13 @@
 {
   "dependencies": {
+    "com.danielmansson.mathematics.fixedpoint": {
+      "version": "file:com.danielmansson.mathematics.fixedpoint@7608425fe2db",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {
+        "com.unity.mathematics": "1.1.0"
+      }
+    },
     "com.unity-x.fixmath": {
       "version": "https://github.com/Unity-X/FixMath.git",
       "depth": 0,
