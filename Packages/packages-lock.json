@@ -8,15 +8,6 @@
         "com.unity.mathematics": "1.1.0"
       }
     },
-    "com.unity-x.fixmath": {
-      "version": "https://github.com/Unity-X/FixMath.git",
-      "depth": 0,
-      "source": "git",
-      "dependencies": {
-        "com.unity.mathematics": "1.2.1"
-      },
-      "hash": "b700ec8ef4fbe66c2bf1488997cb1c33d9d7090e"
-    },
     "com.unity-x.unity.mathematics-x": {
       "version": "https://github.com/Unity-X/Unity.Mathematics-X.git",
       "depth": 0,

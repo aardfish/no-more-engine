@@ -1,5 +1,6 @@
 using NoMoreEngine.Simulation.Snapshot;
 using Unity.Entities;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.Simulation.Components
@@ -48,17 +49,17 @@ namespace NoMoreEngine.Simulation.Components
     /// </summary>
     public struct HealthComponent : IComponentData
     {
-        public fix currentHealth;
-        public fix maxHealth;
+        public fp currentHealth;
+        public fp maxHealth;
 
-        public HealthComponent(fix health)
+        public HealthComponent(fp health)
         {
             currentHealth = health;
             maxHealth = health;
         }
 
-        public bool IsDead => currentHealth <= fix.Zero;
-        public fix HealthPercentage => maxHealth > fix.Zero ? currentHealth / maxHealth : fix.Zero;
+        public bool IsDead => currentHealth <= fp.zero;
+        public fp HealthPercentage => maxHealth > fp.zero ? currentHealth / maxHealth : fp.zero;
     }
 
     /// <summary>
@@ -86,10 +87,10 @@ namespace NoMoreEngine.Simulation.Components
     public struct RespawnComponent : IComponentData
     {
         public float respawnTimer;
-        public fix3 respawnPosition;
+        public fp3 respawnPosition;
         public bool isRespawning;
 
-        public RespawnComponent(fix3 spawnPos)
+        public RespawnComponent(fp3 spawnPos)
         {
             respawnTimer = 0f;
             respawnPosition = spawnPos;
@@ -102,14 +103,14 @@ namespace NoMoreEngine.Simulation.Components
     /// </summary>
     public struct DamageComponent : IComponentData
     {
-        public fix damageAmount;
-        public fix knockbackForce;
+        public fp damageAmount;
+        public fp knockbackForce;
         public DamageType damageType;
 
-        public DamageComponent(fix damage, fix knockback = default, DamageType type = DamageType.Normal)
+        public DamageComponent(fp damage, fp knockback = default, DamageType type = DamageType.Normal)
         {
             damageAmount = damage;
-            knockbackForce = knockback == default ? damage * (fix)0.1f : knockback;
+            knockbackForce = knockback == default ? damage * (fp)0.1f : knockback;
             damageType = type;
         }
     }

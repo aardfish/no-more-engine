@@ -2,6 +2,7 @@ using Unity.Entities;
 using Unity.Burst;
 using UnityEngine;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.Simulation.Systems
@@ -29,7 +30,7 @@ namespace NoMoreEngine.Simulation.Systems
         {
             // Get deterministic delta time from time system
             var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
-            fix deltaTime = time.deltaTime;
+            fp deltaTime = time.deltaTime;
 
             // Update positions for all entities with movement
             foreach (var (transform, movement) in SystemAPI.Query<RefRW<FixTransformComponent>,
@@ -39,8 +40,8 @@ namespace NoMoreEngine.Simulation.Systems
                 if (!movement.ValueRO.isMoving) continue;
 
                 // Simple position integration: position += velocity * deltaTime
-                fix3 currentPosition = transform.ValueRO.position;
-                fix3 velocity = movement.ValueRO.velocity;
+                fp3 currentPosition = transform.ValueRO.position;
+                fp3 velocity = movement.ValueRO.velocity;
 
                 transform.ValueRW.position = currentPosition + velocity * deltaTime;
             }

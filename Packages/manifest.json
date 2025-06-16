@@ -1,7 +1,6 @@
 {
   "dependencies": {
     "com.danielmansson.mathematics.fixedpoint": "https://github.com/aardfish/Unity.Mathematics.FixedPoint.git",
-    "com.unity-x.fixmath": "https://github.com/Unity-X/FixMath.git",
     "com.unity-x.unity.mathematics-x": "https://github.com/Unity-X/Unity.Mathematics-X.git",
     "com.unity-x.unityengine-x": "https://github.com/Unity-X/UnityEngine-X.git",
     "com.unity.ai.navigation": "2.0.8",

@@ -17,6 +17,19 @@ namespace Unity.Mathematics.FixedPoint
         public static readonly fp LOG10E = 0.43429448190325182m;
         public static readonly fp LOG2E = 1.4426950408889634m;
 
+        /// <summary>
+        /// The smallest positive fp value greater than zero.
+        /// This represents the precision of the Q31.32 fixed-point format (2^-32).
+        /// Approximately 2.328 × 10^-10
+        /// </summary>
+        //public static readonly fp EPSILON = fp.FromRaw(1L);
+        
+        /// <summary>
+        /// A small value suitable for floating-point comparisons.
+        /// Use this when checking if two values are approximately equal.
+        /// </summary>
+        //public static readonly fp SMALL_EPSILON = (fp)0.00001m;
+
         const long RAW_PI_TIMES_2 = 0x6487ED511;
         const long RAW_PI = 0x3243F6A88;
         const long RAW_PI_OVER_2 = 0x1921FB544;

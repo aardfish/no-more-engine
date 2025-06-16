@@ -1,7 +1,6 @@
 using Unity.Entities;
 using Unity.Burst;
-using Unity.Collections;
-using static fixMath;
+using Unity.Mathematics.FixedPoint;
 using NoMoreEngine.Simulation.Components;
 
 namespace NoMoreEngine.Simulation.Systems
@@ -48,7 +47,7 @@ namespace NoMoreEngine.Simulation.Systems
 
                     // Determine which entity we are in this collision
                     bool isEntityA = entity == collisionEvent.entityA;
-                    fix3 contactNormal = isEntityA ? collisionEvent.contactNormal : -collisionEvent.contactNormal;
+                    fp3 contactNormal = isEntityA ? collisionEvent.contactNormal : -collisionEvent.contactNormal;
 
                     // Apply collision response based on response type
                     switch (response.ValueRO.responseType)
@@ -71,7 +70,7 @@ namespace NoMoreEngine.Simulation.Systems
                         case CollisionResponse.Destroy:
                             // Mark entity for destruction (implement destroy system later)
                             // For now, just stop movement
-                            movement.ValueRW.velocity = fix3.zero;
+                            movement.ValueRW.velocity = fp3.zero;
                             movement.ValueRW.isMoving = false;
                             break;
 
@@ -102,25 +101,25 @@ namespace NoMoreEngine.Simulation.Systems
         /// </summary>
         [BurstCompile]
         public static void HandleStopResponse(ref FixTransformComponent transform,
-            ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth)
+            ref SimpleMovementComponent movement, in fp3 contactNormal, in fp penetrationDepth)
         {
             // Position correction: move entity out of collision
             transform.position += contactNormal * penetrationDepth;
 
             // Stop movement in the direction of the collision
-            fix3 velocity = movement.velocity;
-            fix velocityAlongNormal = fix3.Dot(velocity, contactNormal);
+            fp3 velocity = movement.velocity;
+            fp velocityAlongNormal = fpmath.dot(velocity, contactNormal);
 
-            if (velocityAlongNormal < (fix)0) // Moving into the collision
+            if (velocityAlongNormal < (fp)0) // Moving into the collision
             {
                 // Remove velocity component along the normal
                 movement.velocity = velocity - contactNormal * velocityAlongNormal;
             }
 
             // If velocity is very small after correction, stop completely
-            if (fixMath.lengthsq(movement.velocity) < (fix)0.01f)
+            if (fpmath.lengthsq(movement.velocity) < (fp)0.01f)
             {
-                movement.velocity = fix3.zero;
+                movement.velocity = fp3.zero;
                 movement.isMoving = false;
             }
         }
@@ -130,29 +129,29 @@ namespace NoMoreEngine.Simulation.Systems
         /// </summary>
         [BurstCompile]
         public static void HandleSlideResponse(ref FixTransformComponent transform,
-            ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth, in fix friction)
+            ref SimpleMovementComponent movement, in fp3 contactNormal, in fp penetrationDepth, in fp friction)
         {
             // Position correction: move entity out of collision
             transform.position += contactNormal * penetrationDepth;
 
             // Slide along the surface
-            fix3 velocity = movement.velocity;
-            fix velocityAlongNormal = fix3.Dot(velocity, contactNormal);
+            fp3 velocity = movement.velocity;
+            fp velocityAlongNormal = fpmath.dot(velocity, contactNormal);
 
-            if (velocityAlongNormal < (fix)0) // Moving into the collision
+            if (velocityAlongNormal < (fp)0) // Moving into the collision
             {
                 // Project velocity onto the collision surface
-                fix3 slideVelocity = velocity - contactNormal * velocityAlongNormal;
+                fp3 slideVelocity = velocity - contactNormal * velocityAlongNormal;
 
                 // Apply friction
-                slideVelocity *= ((fix)1 - friction);
+                slideVelocity *= ((fp)1 - friction);
 
                 movement.velocity = slideVelocity;
 
                 // If velocity is very small after sliding, stop completely
-                if (fixMath.lengthsq(movement.velocity) < (fix)0.01f)
+                if (fpmath.lengthsq(movement.velocity) < (fp)0.01f)
                 {
-                    movement.velocity = fix3.zero;
+                    movement.velocity = fp3.zero;
                     movement.isMoving = false;
                 }
             }
@@ -163,26 +162,26 @@ namespace NoMoreEngine.Simulation.Systems
         /// </summary>
         [BurstCompile]
         public static void HandleBounceResponse(ref FixTransformComponent transform,
-            ref SimpleMovementComponent movement, in fix3 contactNormal, in fix penetrationDepth, in fix bounciness)
+            ref SimpleMovementComponent movement, in fp3 contactNormal, in fp penetrationDepth, in fp bounciness)
         {
             // Position correction: move entity out of collision
             transform.position += contactNormal * penetrationDepth;
 
             // Bounce off the surface
-            fix3 velocity = movement.velocity;
-            fix velocityAlongNormal = fix3.Dot(velocity, contactNormal);
+            fp3 velocity = movement.velocity;
+            fp velocityAlongNormal = fpmath.dot(velocity, contactNormal);
 
-            if (velocityAlongNormal < (fix)0) // Moving into the collision
+            if (velocityAlongNormal < (fp)0) // Moving into the collision
             {
                 // Reflect velocity component along the normal
-                fix3 reflectedVelocity = velocity - contactNormal * velocityAlongNormal * ((fix)1 + bounciness);
+                fp3 reflectedVelocity = velocity - contactNormal * velocityAlongNormal * ((fp)1 + bounciness);
 
                 movement.velocity = reflectedVelocity;
 
                 // If velocity is very small after bouncing, stop completely
-                if (fixMath.lengthsq(movement.velocity) < (fix)0.01f)
+                if (fpmath.lengthsq(movement.velocity) < (fp)0.01f)
                 {
-                    movement.velocity = fix3.zero;
+                    movement.velocity = fp3.zero;
                     movement.isMoving = false;
                 }
             }

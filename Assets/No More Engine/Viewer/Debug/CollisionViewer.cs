@@ -2,6 +2,7 @@ using Unity.Entities;
 using Unity.Collections;
 using UnityEngine;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.Viewer.Debug
 {
@@ -65,10 +66,10 @@ namespace NoMoreEngine.Viewer.Debug
                 var bound = bounds[i];
 
                 // Convert to Unity types
-                Vector3 position = transform.position.ToUnityVec();
-                Vector3 boundsCenter = position + bound.offset.ToUnityVec();
-                Vector3 boundsSize = bound.size.ToUnityVec();
-                Quaternion rotation = transform.rotation.ToUnityQuat();
+                Vector3 position = transform.position.ToVector3();
+                Vector3 boundsCenter = position + bound.offset.ToVector3();
+                Vector3 boundsSize = bound.size.ToVector3();
+                Quaternion rotation = transform.rotation.ToQuaternion();
 
                 // Get color based on entity type or collision properties
                 Color boundsColor = GetCollisionBoundsColor(entity);
@@ -121,8 +122,8 @@ namespace NoMoreEngine.Viewer.Debug
                     var collision = collisionEvents[i].collisionEvent;
 
                     // Convert to Unity types
-                    Vector3 contactPoint = collision.contactPoint.ToUnityVec();
-                    Vector3 contactNormal = collision.contactNormal.ToUnityVec();
+                    Vector3 contactPoint = collision.contactPoint.ToVector3();
+                    Vector3 contactNormal = collision.contactNormal.ToVector3();
 
                     // Draw contact point as a small sphere
                     Color eventColor = GetCollisionEventColor(collision.layerA, collision.layerB);

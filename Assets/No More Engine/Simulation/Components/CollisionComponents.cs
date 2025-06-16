@@ -1,6 +1,7 @@
 using NoMoreEngine.Simulation.Snapshot;
 using Unity.Entities;
 using Unity.Mathematics;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.Simulation.Components
@@ -11,30 +12,30 @@ namespace NoMoreEngine.Simulation.Components
     [Snapshotable(Priority = 3)]
     public struct CollisionBoundsComponent : IComponentData, ISnapshotable<CollisionBoundsComponent>
     {
-        public fix3 size;           // AABB dimensions (full size, not half-extents)
-        public fix3 offset;         // Offset from transform center
-        public fix tolerance;       // Small tolerance for collision precision (optional)
+        public fp3 size;           // AABB dimensions (full size, not half-extents)
+        public fp3 offset;         // Offset from transform center
+        public fp tolerance;       // Small tolerance for collision precision (optional)
 
-        public CollisionBoundsComponent(fix3 size, fix3 offset = default, fix tolerance = default)
+        public CollisionBoundsComponent(fp3 size, fp3 offset = default, fp tolerance = default)
         {
             this.size = size;
             this.offset = offset;
-            this.tolerance = tolerance == default ? (fix)0.001f : tolerance;
+            this.tolerance = tolerance == default ? (fp)0.001f : tolerance;
         }
 
         /// <summary>
         /// Get AABB min/max bounds in world space
         /// </summary>
-        public void GetWorldBounds(fix3 worldPosition, out fix3 min, out fix3 max)
+        public void GetWorldBounds(fp3 worldPosition, out fp3 min, out fp3 max)
         {
-            fix3 center = worldPosition + offset;
-            fix3 halfSize = size * (fix)0.5f;
+            fp3 center = worldPosition + offset;
+            fp3 halfSize = size * (fp)0.5f;
             min = center - halfSize;
             max = center + halfSize;
         }
 
         public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<CollisionBoundsComponent>();
-        public bool ValidateSnapshot() => size.x > (fix)0 && size.y > (fix)0 && size.z > (fix)0;
+        public bool ValidateSnapshot() => size.x > (fp)0 && size.y > (fp)0 && size.z > (fp)0;
     }
 
     /// <summary>
@@ -61,20 +62,20 @@ namespace NoMoreEngine.Simulation.Components
     public struct CollisionResponseComponent : IComponentData, ISnapshotable<CollisionResponseComponent>
     {
         public CollisionResponse responseType;
-        public fix bounciness;          // 0-1, how much velocity is retained on bounce
-        public fix friction;            // 0-1, how much velocity is lost on slide
+        public fp bounciness;          // 0-1, how much velocity is retained on bounce
+        public fp friction;            // 0-1, how much velocity is lost on slide
         public CollisionLayer entityLayer;     // What layer this entity is on
         public CollisionLayer collidesWith;    // What layers this entity collides with
 
         public CollisionResponseComponent(CollisionResponse responseType,
             CollisionLayer entityLayer, CollisionLayer collidesWith,
-            fix bounciness = default, fix friction = default)
+            fp bounciness = default, fp friction = default)
         {
             this.responseType = responseType;
             this.entityLayer = entityLayer;
             this.collidesWith = collidesWith;
-            this.bounciness = bounciness == default ? (fix)0.5f : bounciness;
-            this.friction = friction == default ? (fix)0.1f : friction;
+            this.bounciness = bounciness == default ? (fp)0.5f : bounciness;
+            this.friction = friction == default ? (fp)0.1f : friction;
         }
 
         public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<CollisionResponseComponent>();
@@ -118,14 +119,14 @@ namespace NoMoreEngine.Simulation.Components
     {
         public Entity entityA;
         public Entity entityB;
-        public fix3 contactPoint;      // World space contact point
-        public fix3 contactNormal;     // Normal pointing from A to B
-        public fix penetrationDepth;   // How deep the collision is
+        public fp3 contactPoint;      // World space contact point
+        public fp3 contactNormal;     // Normal pointing from A to B
+        public fp penetrationDepth;   // How deep the collision is
         public CollisionLayer layerA;
         public CollisionLayer layerB;
 
-        public CollisionEvent(Entity entityA, Entity entityB, fix3 contactPoint, 
-            fix3 contactNormal, fix penetrationDepth, CollisionLayer layerA, CollisionLayer layerB)
+        public CollisionEvent(Entity entityA, Entity entityB, fp3 contactPoint, 
+            fp3 contactNormal, fp penetrationDepth, CollisionLayer layerA, CollisionLayer layerB)
         {
             this.entityA = entityA;
             this.entityB = entityB;
@@ -167,12 +168,12 @@ namespace NoMoreEngine.Simulation.Components
     public struct CollisionContactBuffer : IBufferElementData
     {
         public Entity otherEntity;
-        public fix3 contactPoint;
-        public fix3 contactNormal;
-        public fix penetration;
+        public fp3 contactPoint;
+        public fp3 contactNormal;
+        public fp penetration;
         public CollisionLayer otherLayer;
         
-        public CollisionContactBuffer(Entity other, fix3 point, fix3 normal, fix depth, CollisionLayer layer)
+        public CollisionContactBuffer(Entity other, fp3 point, fp3 normal, fp depth, CollisionLayer layer)
         {
             otherEntity = other;
             contactPoint = point;
@@ -189,9 +190,9 @@ namespace NoMoreEngine.Simulation.Components
     {
         public Entity entityA;
         public Entity entityB;
-        public fix3 contactPoint;
-        public fix3 contactNormal;
-        public fix penetrationDepth;
+        public fp3 contactPoint;
+        public fp3 contactNormal;
+        public fp penetrationDepth;
         public CollisionLayer layerA;
         public CollisionLayer layerB;
 
@@ -229,32 +230,32 @@ namespace NoMoreEngine.Simulation.Components
     {
         // Ground contact state
         public bool isGrounded;
-        public fix3 groundNormal;
-        public fix3 groundContactPoint;
-        public fix timeSinceLastGrounded;
+        public fp3 groundNormal;
+        public fp3 groundContactPoint;
+        public fp timeSinceLastGrounded;
         
         // Collision resolution state
-        public fix3 lastResolvedPosition;
-        public fix3 lastResolvedVelocity;
+        public fp3 lastResolvedPosition;
+        public fp3 lastResolvedVelocity;
         public uint lastResolvedTick;
         
         // Penetration state
         public bool wasResolvingPenetration;
-        public fix penetrationDepth;
-        public fix3 penetrationNormal;
+        public fp penetrationDepth;
+        public fp3 penetrationNormal;
         
         public static CollisionStateComponent Default => new CollisionStateComponent
         {
             isGrounded = false,
-            groundNormal = new fix3(fix.Zero, fix.One, fix.Zero),
-            groundContactPoint = fix3.zero,
-            timeSinceLastGrounded = fix.Zero,
-            lastResolvedPosition = fix3.zero,
-            lastResolvedVelocity = fix3.zero,
+            groundNormal = new fp3(fp.zero, fp.one, fp.zero),
+            groundContactPoint = fp3.zero,
+            timeSinceLastGrounded = fp.zero,
+            lastResolvedPosition = fp3.zero,
+            lastResolvedVelocity = fp3.zero,
             lastResolvedTick = 0,
             wasResolvingPenetration = false,
-            penetrationDepth = fix.Zero,
-            penetrationNormal = fix3.zero
+            penetrationDepth = fp.zero,
+            penetrationNormal = fp3.zero
         };
         
         public int GetSnapshotSize() => System.Runtime.InteropServices.Marshal.SizeOf<CollisionStateComponent>();

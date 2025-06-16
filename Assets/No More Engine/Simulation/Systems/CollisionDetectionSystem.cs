@@ -3,6 +3,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.Simulation.Systems
 {
@@ -196,8 +197,8 @@ namespace NoMoreEngine.Simulation.Systems
             out CollisionCandidate collision)
         {
             // Get world space bounds for both entities
-            boundsA.GetWorldBounds(transformA.position, out fix3 minA, out fix3 maxA);
-            boundsB.GetWorldBounds(transformB.position, out fix3 minB, out fix3 maxB);
+            boundsA.GetWorldBounds(transformA.position, out fp3 minA, out fp3 maxA);
+            boundsB.GetWorldBounds(transformB.position, out fp3 minB, out fp3 maxB);
 
             // AABB collision test
             bool colliding = minA.x <= maxB.x && maxA.x >= minB.x &&
@@ -209,38 +210,38 @@ namespace NoMoreEngine.Simulation.Systems
             if (colliding)
             {
                 // Calculate collision details
-                fix3 overlapMin = fix3.Max(minA, minB);
-                fix3 overlapMax = fix3.Min(maxA, maxB);
-                fix3 overlap = overlapMax - overlapMin;
+                fp3 overlapMin = fpmath.max(minA, minB);
+                fp3 overlapMax = fpmath.min(maxA, maxB);
+                fp3 overlap = overlapMax - overlapMin;
 
                 // Find the axis with minimum penetration (separation axis)
-                fix penetrationDepth;
-                fix3 contactNormal;
+                fp penetrationDepth;
+                fp3 contactNormal;
 
                 if (overlap.x <= overlap.y && overlap.x <= overlap.z)
                 {
                     // X-axis has minimum penetration
                     penetrationDepth = overlap.x;
                     contactNormal = transformA.position.x < transformB.position.x ?
-                        new fix3((fix)(-1), (fix)0, (fix)0) : new fix3((fix)1, (fix)0, (fix)0);
+                        new fp3((fp)(-1), (fp)0, (fp)0) : new fp3((fp)1, (fp)0, (fp)0);
                 }
                 else if (overlap.y <= overlap.z)
                 {
                     // Y-axis has minimum penetration
                     penetrationDepth = overlap.y;
                     contactNormal = transformA.position.y < transformB.position.y ?
-                        new fix3((fix)0, (fix)(-1), (fix)0) : new fix3((fix)0, (fix)1, (fix)0);
+                        new fp3((fp)0, (fp)(-1), (fp)0) : new fp3((fp)0, (fp)1, (fp)0);
                 }
                 else
                 {
                     // Z-axis has minimum penetration
                     penetrationDepth = overlap.z;
                     contactNormal = transformA.position.z < transformB.position.z ?
-                        new fix3((fix)0, (fix)0, (fix)(-1)) : new fix3((fix)0, (fix)0, (fix)1);
+                        new fp3((fp)0, (fp)0, (fp)(-1)) : new fp3((fp)0, (fp)0, (fp)1);
                 }
 
                 // Contact point is center of overlap region
-                fix3 contactPoint = (overlapMin + overlapMax) * (fix)0.5f;
+                fp3 contactPoint = (overlapMin + overlapMax) * (fp)0.5f;
 
                 collision = new CollisionCandidate
                 {

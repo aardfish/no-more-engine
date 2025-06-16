@@ -1,5 +1,6 @@
 using Unity.Entities;
 using NoMoreEngine.Simulation.Snapshot;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.Simulation.Components
 {
@@ -13,8 +14,8 @@ namespace NoMoreEngine.Simulation.Components
         // Core timing
         public uint currentTick;           // Deterministic frame counter
         public uint tickRate;              // Ticks per second (default 60)
-        public fix deltaTime;              // Fixed timestep (1/tickRate)
-        public fix elapsedTime;            // Total simulation time in seconds
+        public fp deltaTime;              // Fixed timestep (1/tickRate)
+        public fp elapsedTime;            // Total simulation time in seconds
         
         // Rollback support (prepare for future implementation)
         public uint lastConfirmedTick;     // Last tick where all inputs were confirmed
@@ -33,8 +34,8 @@ namespace NoMoreEngine.Simulation.Components
             {
                 currentTick = 0,
                 tickRate = 60,
-                deltaTime = fix.One / (fix)60,  // 0.01666... seconds
-                elapsedTime = fix.Zero,
+                deltaTime = fp.one / (fp)60,  // 0.01666... seconds
+                elapsedTime = fp.zero,
                 lastConfirmedTick = 0,
                 maxRollbackWindow = 8,
                 ticksThisSecond = 0,
@@ -51,8 +52,8 @@ namespace NoMoreEngine.Simulation.Components
             {
                 currentTick = 0,
                 tickRate = tickRate,
-                deltaTime = fix.One / (fix)tickRate,
-                elapsedTime = fix.Zero,
+                deltaTime = fp.one / (fp)tickRate,
+                elapsedTime = fp.zero,
                 lastConfirmedTick = 0,
                 maxRollbackWindow = rollbackWindow,
                 ticksThisSecond = 0,
@@ -95,7 +96,7 @@ namespace NoMoreEngine.Simulation.Components
             // Validate time is in reasonable bounds
             return tickRate > 0 && 
                    tickRate <= 240 && // Max 240Hz seems reasonable
-                   deltaTime > fix.Zero &&
+                   deltaTime > fp.zero &&
                    currentTick >= lastConfirmedTick;
         }
     }

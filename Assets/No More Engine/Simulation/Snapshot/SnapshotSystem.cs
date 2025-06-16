@@ -6,6 +6,7 @@ using NoMoreEngine.Simulation.Components;
 using System.Collections.Generic;
 using NoMoreEngine.Simulation.Systems;
 using NoMoreEngine.Input;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
@@ -199,7 +200,7 @@ namespace NoMoreEngine.Simulation.Snapshot
             var timeComponent = SimulationTimeComponent.Create60Hz();
             timeComponent.currentTick = tick;
             timeComponent.lastConfirmedTick = tick > 0 ? tick - 1 : 0;
-            timeComponent.elapsedTime = (fix)(tick / 60f); // Assuming 60Hz
+            timeComponent.elapsedTime = (fp)(tick / 60f); // Assuming 60Hz
 
             EntityManager.SetComponentData(entity, timeComponent);
         }

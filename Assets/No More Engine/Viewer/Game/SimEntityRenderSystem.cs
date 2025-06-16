@@ -2,6 +2,7 @@ using Unity.Entities;
 using Unity.Collections;
 using UnityEngine;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.Viewer.Game
 {
@@ -54,9 +55,9 @@ namespace NoMoreEngine.Viewer.Game
                 // Convert fixed-point to Unity types using extensions
                 var renderData = new CachedEntityRenderData
                 {
-                    position = fixTransform.position.ToUnityVec(),
-                    rotation = fixTransform.rotation.ToUnityQuat(),
-                    scale = fixTransform.scale.ToUnityVec(),
+                    position = fixTransform.position.ToVector3(),
+                    rotation = fixTransform.rotation.ToQuaternion(),
+                    scale = fixTransform.scale.ToVector3(),
                     entityType = simEntityType.simEntityType,
                     entity = entity
                 };

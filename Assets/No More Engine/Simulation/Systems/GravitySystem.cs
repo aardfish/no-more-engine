@@ -1,7 +1,8 @@
 using Unity.Entities;
 using Unity.Burst;
-using static fixMath;
+using Unity.Mathematics.FixedPoint;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics;
 
 namespace NoMoreEngine.Simulation.Systems
 {
@@ -52,7 +53,7 @@ namespace NoMoreEngine.Simulation.Systems
 
             // Get deterministic delta time from time system
             var time = SystemAPI.GetSingleton<SimulationTimeComponent>();
-            fix deltaTime = time.deltaTime;
+            fp deltaTime = time.deltaTime;
 
             // Apply gravity to all physics-enabled entities
             foreach (var (movement, physics) in
@@ -62,7 +63,7 @@ namespace NoMoreEngine.Simulation.Systems
                 if (!physics.ValueRO.affectedByGravity) continue;
 
                 // Calculate gravity acceleration for this entity
-                fix3 gravityAcceleration = physics.ValueRO.CalculateGravityAcceleration(globalGravity);
+                fp3 gravityAcceleration = physics.ValueRO.CalculateGravityAcceleration(globalGravity);
 
                 // Apply gravity to velocity: v = v + a * t
                 movement.ValueRW.velocity += gravityAcceleration * deltaTime;
@@ -71,7 +72,7 @@ namespace NoMoreEngine.Simulation.Systems
                 movement.ValueRW.velocity = physics.ValueRO.ApplyTerminalVelocity(movement.ValueRW.velocity);
 
                 // Ensure movement is enabled if velocity is non-zero
-                if (lengthsq(movement.ValueRO.velocity) > fix.Epsilon)
+                if (fpmath.lengthsq(movement.ValueRO.velocity) > fp.precision)
                 {
                     movement.ValueRW.isMoving = true;
                 }
@@ -123,7 +124,7 @@ namespace NoMoreEngine.Simulation.Systems
         /// <summary>
         /// Modify global gravity scale
         /// </summary>
-        public static void SetGlobalGravityScale(EntityManager entityManager, fix newScale)
+        public static void SetGlobalGravityScale(EntityManager entityManager, fp newScale)
         {
             var query = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
 

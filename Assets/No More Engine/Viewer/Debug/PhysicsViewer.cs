@@ -2,6 +2,7 @@ using Unity.Entities;
 using Unity.Collections;
 using UnityEngine;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.Viewer.Debug
@@ -61,7 +62,7 @@ namespace NoMoreEngine.Viewer.Debug
 
             // Draw global gravity at world origin
             Vector3 origin = Vector3.zero;
-            Vector3 gravityVector = globalGravity.FinalGravity.ToUnityVec();
+            Vector3 gravityVector = globalGravity.FinalGravity.ToVector3();
 
             // Scale the vector for visibility
             Vector3 gravityEnd = origin + gravityVector.normalized * 5f;
@@ -104,7 +105,7 @@ namespace NoMoreEngine.Viewer.Debug
                 var transform = transforms[i];
                 var physics = physicsComponents[i];
 
-                Vector3 position = transform.position.ToUnityVec();
+                Vector3 position = transform.position.ToVector3();
 
                 // Draw gravity vector for this entity
                 if (showGravityVectors && physics.affectedByGravity)
@@ -138,9 +139,9 @@ namespace NoMoreEngine.Viewer.Debug
                 var globalGravity = globalGravityQuery.GetSingleton<GlobalGravityComponent>();
                 var gravityAcceleration = physics.CalculateGravityAcceleration(globalGravity);
 
-                if (fixMath.lengthsq(gravityAcceleration) > fix.Epsilon)
+                if (fpmath.lengthsq(gravityAcceleration) > fp.precision)
                 {
-                    Vector3 gravityVector = gravityAcceleration.ToUnityVec();
+                    Vector3 gravityVector = gravityAcceleration.ToVector3();
                     Vector3 gravityEnd = position + gravityVector.normalized * vectorScale;
 
                     // Color based on gravity source
@@ -168,7 +169,7 @@ namespace NoMoreEngine.Viewer.Debug
         {
             if (!movement.isMoving) return;
 
-            Vector3 velocity = movement.velocity.ToUnityVec();
+            Vector3 velocity = movement.velocity.ToVector3();
             if (velocity.magnitude < 0.1f) return;
 
             Vector3 velocityEnd = position + velocity.normalized * vectorScale * 1.5f;

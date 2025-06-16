@@ -2,6 +2,7 @@ using NoMoreEngine.Simulation.Components;
 using NoMoreEngine.Simulation.Systems;
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Mathematics.FixedPoint;
 using UnityEngine;
 
 
@@ -234,7 +235,7 @@ namespace NoMoreEngine.Simulation.Bridge
         /// <summary>
         /// Set global gravity scale
         /// </summary>
-        public void SetGlobalGravityScale(fix scale)
+        public void SetGlobalGravityScale(fp scale)
         {
             if (!IsInitialized) return;
             GravityUtility.SetGlobalGravityScale(entityManager, scale);

@@ -1,5 +1,6 @@
 using NoMoreEngine.Simulation.Components;
 using Unity.Entities;
+using Unity.Mathematics.FixedPoint;
 using UnityEngine;
 
 
@@ -14,29 +15,29 @@ namespace NoMoreEngine.Simulation.Authoring
         public SimEntityType simEntityType = SimEntityType.Environment;
 
         [Header("Fixed-Point Transform")]
-        public fix3 startPosition = fix3.zero;
-        public fixQuaternion startRotation = fixQuaternion.Identity;
-        public fix3 startScale = fix3.one;
+        public fp3 startPosition = fp3.zero;
+        public fpquaternion startRotation = fpquaternion.identity;
+        public fp3 startScale = new fp3(fp.one);
 
         [Header("Simple Movement (Optional)")]
         [SerializeField] private bool enableMovement = false;
-        [SerializeField] private fix3 velocity = fix3.zero;
+        [SerializeField] private fp3 velocity = fp3.zero;
 
         [Header("Collision Settings")]
         [SerializeField] private bool enableCollision = false;
         [SerializeField] private bool isStaticCollider = false;
 
         [Header("Collision Bounds")]
-        [SerializeField] private fix3 collisionSize = fix3.one;
-        [SerializeField] private fix3 collisionOffset = fix3.zero;
-        [SerializeField] private fix collisionTolerance = (fix)0.001f;
+        [SerializeField] private fp3 collisionSize = new fp3(fp.one);
+        [SerializeField] private fp3 collisionOffset = fp3.zero;
+        [SerializeField] private fp collisionTolerance = (fp)0.001f;
 
         [Header("Collision Response")]
         [SerializeField] private CollisionResponse collisionResponse = CollisionResponse.Stop;
         [SerializeField] private CollisionLayer entityLayer = CollisionLayer.Environment;
         [SerializeField] private CollisionLayer collidesWith = CollisionLayer.All;
-        [SerializeField] private fix bounciness = (fix)0.5f;
-        [SerializeField] private fix friction = (fix)0.1f;
+        [SerializeField] private fp bounciness = (fp)0.5f;
+        [SerializeField] private fp friction = (fp)0.1f;
 
         [Header("Collision Events")]
         [SerializeField] private bool generateCollisionEvents = false;
@@ -45,14 +46,14 @@ namespace NoMoreEngine.Simulation.Authoring
         [SerializeField] private bool enablePhysics = false;
 
         [Header("Mass & Gravity")]
-        [SerializeField] private fix mass = (fix)1.0f;
-        [SerializeField] private fix gravityScale = (fix)1.0f;
+        [SerializeField] private fp mass = (fp)1.0f;
+        [SerializeField] private fp gravityScale = (fp)1.0f;
         [SerializeField] private bool affectedByGravity = true;
-        [SerializeField] private fix terminalVelocity = (fix)50.0f; // 0 = no limit
+        [SerializeField] private fp terminalVelocity = (fp)50.0f; // 0 = no limit
 
         [Header("Custom Gravity (Optional)")]
         [SerializeField] private bool useCustomGravity = false;
-        [SerializeField] private fix3 customGravity = new fix3((fix)0, (fix)(-9.81f), (fix)0);
+        [SerializeField] private fp3 customGravity = new fp3((fp)0, (fp)(-9.81f), (fp)0);
 
         [Header("Physics Presets")]
         [SerializeField] private PhysicsPreset physicsPreset = PhysicsPreset.Custom;
@@ -69,14 +70,14 @@ namespace NoMoreEngine.Simulation.Authoring
 
         // Public accessors for inspector and debugging
         public SimEntityType EntityType => simEntityType;
-        public fix3 StartPosition => startPosition;
+        public fp3 StartPosition => startPosition;
         public bool EnableMovement => enableMovement;
         public bool EnableCollision => enableCollision;
         public bool IsStaticCollider => isStaticCollider;
         public CollisionResponse CollisionResponse => collisionResponse;
         public CollisionLayer EntityLayer => entityLayer;
         public bool EnablePhysics => enablePhysics;
-        public fix Mass => mass;
+        public fp Mass => mass;
         public bool AffectedByGravity => affectedByGravity;
 
         /// <summary>
@@ -266,36 +267,36 @@ namespace NoMoreEngine.Simulation.Authoring
                 {
                     case SimEntityType.Player:
                         // Players typically have normal physics
-                        if (physicsComponent.mass == (fix)1 && physicsComponent.gravityScale == (fix)1)
+                        if (physicsComponent.mass == (fp)1 && physicsComponent.gravityScale == (fp)1)
                         {
-                            physicsComponent.mass = (fix)1.2f; // Slightly heavier for stability
-                            physicsComponent.terminalVelocity = (fix)40; // Reasonable fall speed
+                            physicsComponent.mass = (fp)1.2f; // Slightly heavier for stability
+                            physicsComponent.terminalVelocity = (fp)40; // Reasonable fall speed
                         }
                         break;
 
                     case SimEntityType.Enemy:
                         // Enemies can vary, but default to normal
-                        if (physicsComponent.mass == (fix)1 && physicsComponent.gravityScale == (fix)1)
+                        if (physicsComponent.mass == (fp)1 && physicsComponent.gravityScale == (fp)1)
                         {
-                            physicsComponent.mass = (fix)1.0f;
-                            physicsComponent.terminalVelocity = (fix)45;
+                            physicsComponent.mass = (fp)1.0f;
+                            physicsComponent.terminalVelocity = (fp)45;
                         }
                         break;
 
                     case SimEntityType.Projectile:
                         // Projectiles are typically light and fast
-                        if (physicsComponent.mass == (fix)1 && physicsComponent.gravityScale == (fix)1)
+                        if (physicsComponent.mass == (fp)1 && physicsComponent.gravityScale == (fp)1)
                         {
-                            physicsComponent.mass = (fix)0.1f; // Very light
-                            physicsComponent.gravityScale = (fix)0.5f; // Less affected by gravity
-                            physicsComponent.terminalVelocity = (fix)100; // Can move very fast
+                            physicsComponent.mass = (fp)0.1f; // Very light
+                            physicsComponent.gravityScale = (fp)0.5f; // Less affected by gravity
+                            physicsComponent.terminalVelocity = (fp)100; // Can move very fast
                         }
                         break;
 
                     case SimEntityType.Environment:
                         // Environment entities should not be affected by gravity
                         physicsComponent.affectedByGravity = false;
-                        physicsComponent.mass = (fix)999; // Very heavy (won't move anyway)
+                        physicsComponent.mass = (fp)999; // Very heavy (won't move anyway)
                         break;
                 }
 
@@ -335,13 +336,13 @@ namespace NoMoreEngine.Simulation.Authoring
             if (enableCollision)
             {
                 // Ensure collision size is positive
-                if (collisionSize.x <= (fix)0) collisionSize.x = (fix)0.1f;
-                if (collisionSize.y <= (fix)0) collisionSize.y = (fix)0.1f;
-                if (collisionSize.z <= (fix)0) collisionSize.z = (fix)0.1f;
+                if (collisionSize.x <= (fp)0) collisionSize.x = (fp)0.1f;
+                if (collisionSize.y <= (fp)0) collisionSize.y = (fp)0.1f;
+                if (collisionSize.z <= (fp)0) collisionSize.z = (fp)0.1f;
 
                 // Clamp bounciness and friction to valid ranges
-                bounciness = fixMath.clamp(bounciness, (fix)0, (fix)1);
-                friction = fixMath.clamp(friction, (fix)0, (fix)1);
+                bounciness = fpmath.clamp(bounciness, (fp)0, (fp)1);
+                friction = fpmath.clamp(friction, (fp)0, (fp)1);
 
                 // Auto-enable collision events for certain cases
                 if (isStaticCollider && entityLayer == CollisionLayer.Trigger)
@@ -359,13 +360,13 @@ namespace NoMoreEngine.Simulation.Authoring
             if (enablePhysics)
             {
                 // Ensure mass is positive
-                if (mass <= (fix)0) mass = (fix)0.1f;
+                if (mass <= (fp)0) mass = (fp)0.1f;
 
                 // Ensure gravity scale is reasonable
-                gravityScale = fixMath.clamp(gravityScale, (fix)(-10), (fix)10);
+                gravityScale = fpmath.clamp(gravityScale, (fp)(-10), (fp)10);
 
                 // Ensure terminal velocity is non-negative
-                if (terminalVelocity < (fix)0) terminalVelocity = (fix)0;
+                if (terminalVelocity < (fp)0) terminalVelocity = (fp)0;
 
                 // Auto-configure based on preset selection
                 if (physicsPreset != PhysicsPreset.Custom)

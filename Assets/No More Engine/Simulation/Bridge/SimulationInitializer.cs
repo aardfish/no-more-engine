@@ -4,6 +4,7 @@ using Unity.Collections;
 using System.Collections.Generic;
 using NoMoreEngine.Session;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.Simulation.Bridge
@@ -139,9 +140,9 @@ namespace NoMoreEngine.Simulation.Bridge
 
             entityManager.AddComponentData(floor, new FixTransformComponent
             {
-                position = new fix3(0, (fix)(-0.5f), 0),
-                rotation = fixQuaternion.Identity,
-                scale = new fix3(20, 1, 20)
+                position = new fp3(0, (fp)(-0.5f), 0),
+                rotation = fpquaternion.identity,
+                scale = new fp3(20, 1, 20)
             });
 
             entityManager.AddComponentData(floor, new SimEntityTypeComponent
@@ -151,9 +152,9 @@ namespace NoMoreEngine.Simulation.Bridge
 
             entityManager.AddComponentData(floor, new CollisionBoundsComponent
             {
-                size = new fix3(20, 1, 20),
-                offset = fix3.zero,
-                tolerance = (fix)0.001f
+                size = new fp3(20, 1, 20),
+                offset = fp3.zero,
+                tolerance = (fp)0.001f
             });
 
             entityManager.AddComponentData(floor, new CollisionResponseComponent
@@ -161,17 +162,17 @@ namespace NoMoreEngine.Simulation.Bridge
                 responseType = CollisionResponse.None,
                 entityLayer = CollisionLayer.Environment,
                 collidesWith = CollisionLayer.All,
-                bounciness = (fix)0,
-                friction = (fix)0.5f
+                bounciness = (fp)0,
+                friction = (fp)0.5f
             });
 
             entityManager.AddComponentData(floor, new StaticColliderComponent { isStatic = true });
 
             // Create some walls
-            CreateWall(new fix3(10, 2, 0), new fix3(1, 4, 20));   // Right wall
-            CreateWall(new fix3(-10, 2, 0), new fix3(1, 4, 20));  // Left wall
-            CreateWall(new fix3(0, 2, 10), new fix3(20, 4, 1));   // Back wall
-            CreateWall(new fix3(0, 2, -10), new fix3(20, 4, 1));  // Front wall
+            CreateWall(new fp3(10, 2, 0), new fp3(1, 4, 20));   // Right wall
+            CreateWall(new fp3(-10, 2, 0), new fp3(1, 4, 20));  // Left wall
+            CreateWall(new fp3(0, 2, 10), new fp3(20, 4, 1));   // Back wall
+            CreateWall(new fp3(0, 2, -10), new fp3(20, 4, 1));  // Front wall
 
             Debug.Log("[SimulationInit] Created test arena");
         }
@@ -179,16 +180,16 @@ namespace NoMoreEngine.Simulation.Bridge
         private void CreateSmallBox()
         {
             // Small enclosed box for close combat
-            var floor = CreatePlatform(fix3.zero, new fix3(10, 1, 10));
+            var floor = CreatePlatform(fp3.zero, new fp3(10, 1, 10));
 
             // Walls
-            CreateWall(new fix3(5, 2, 0), new fix3(1, 4, 10));    // Right
-            CreateWall(new fix3(-5, 2, 0), new fix3(1, 4, 10));   // Left
-            CreateWall(new fix3(0, 2, 5), new fix3(10, 4, 1));    // Back
-            CreateWall(new fix3(0, 2, -5), new fix3(10, 4, 1));   // Front
+            CreateWall(new fp3(5, 2, 0), new fp3(1, 4, 10));    // Right
+            CreateWall(new fp3(-5, 2, 0), new fp3(1, 4, 10));   // Left
+            CreateWall(new fp3(0, 2, 5), new fp3(10, 4, 1));    // Back
+            CreateWall(new fp3(0, 2, -5), new fp3(10, 4, 1));   // Front
 
             // Ceiling (optional)
-            CreatePlatform(new fix3(0, 4, 0), new fix3(10, 1, 10));
+            CreatePlatform(new fp3(0, 4, 0), new fp3(10, 1, 10));
 
             Debug.Log("[SimulationInit] Created small box arena");
         }
@@ -196,21 +197,21 @@ namespace NoMoreEngine.Simulation.Bridge
         private void CreateLargePlatform()
         {
             // Large open platform with some obstacles
-            var floor = CreatePlatform(fix3.zero, new fix3(40, 1, 40));
+            var floor = CreatePlatform(fp3.zero, new fp3(40, 1, 40));
 
             // Add some platforms at different heights
-            CreatePlatform(new fix3(-10, 2, -10), new fix3(8, 1, 8));
-            CreatePlatform(new fix3(10, 3, -10), new fix3(6, 1, 6));
-            CreatePlatform(new fix3(-10, 4, 10), new fix3(6, 1, 6));
-            CreatePlatform(new fix3(10, 2, 10), new fix3(8, 1, 8));
+            CreatePlatform(new fp3(-10, 2, -10), new fp3(8, 1, 8));
+            CreatePlatform(new fp3(10, 3, -10), new fp3(6, 1, 6));
+            CreatePlatform(new fp3(-10, 4, 10), new fp3(6, 1, 6));
+            CreatePlatform(new fp3(10, 2, 10), new fp3(8, 1, 8));
 
             // Center pillar
-            CreateWall(new fix3(0, 3, 0), new fix3(4, 6, 4));
+            CreateWall(new fp3(0, 3, 0), new fp3(4, 6, 4));
 
             Debug.Log("[SimulationInit] Created large platform arena");
         }
 
-        private Entity CreatePlatform(fix3 position, fix3 size)
+        private Entity CreatePlatform(fp3 position, fp3 size)
         {
             var platform = entityManager.CreateEntity();
             matchEntities.Add(platform);
@@ -218,7 +219,7 @@ namespace NoMoreEngine.Simulation.Bridge
             entityManager.AddComponentData(platform, new FixTransformComponent
             {
                 position = position,
-                rotation = fixQuaternion.Identity,
+                rotation = fpquaternion.identity,
                 scale = size
             });
 
@@ -230,8 +231,8 @@ namespace NoMoreEngine.Simulation.Bridge
             entityManager.AddComponentData(platform, new CollisionBoundsComponent
             {
                 size = size,
-                offset = fix3.zero,
-                tolerance = (fix)0.001f
+                offset = fp3.zero,
+                tolerance = (fp)0.001f
             });
 
             entityManager.AddComponentData(platform, new CollisionResponseComponent
@@ -239,8 +240,8 @@ namespace NoMoreEngine.Simulation.Bridge
                 responseType = CollisionResponse.None,
                 entityLayer = CollisionLayer.Environment,
                 collidesWith = CollisionLayer.All,
-                bounciness = (fix)0,
-                friction = (fix)0.5f
+                bounciness = (fp)0,
+                friction = (fp)0.5f
             });
 
             entityManager.AddComponentData(platform, new StaticColliderComponent { isStatic = true });
@@ -248,7 +249,7 @@ namespace NoMoreEngine.Simulation.Bridge
             return platform;
         }
 
-        private void CreateWall(fix3 position, fix3 size)
+        private void CreateWall(fp3 position, fp3 size)
         {
             var wall = entityManager.CreateEntity();
             matchEntities.Add(wall);
@@ -256,7 +257,7 @@ namespace NoMoreEngine.Simulation.Bridge
             entityManager.AddComponentData(wall, new FixTransformComponent
             {
                 position = position,
-                rotation = fixQuaternion.Identity,
+                rotation = fpquaternion.identity,
                 scale = size
             });
 
@@ -268,8 +269,8 @@ namespace NoMoreEngine.Simulation.Bridge
             entityManager.AddComponentData(wall, new CollisionBoundsComponent
             {
                 size = size,
-                offset = fix3.zero,
-                tolerance = (fix)0.001f
+                offset = fp3.zero,
+                tolerance = (fp)0.001f
             });
 
             entityManager.AddComponentData(wall, new CollisionResponseComponent
@@ -277,8 +278,8 @@ namespace NoMoreEngine.Simulation.Bridge
                 responseType = CollisionResponse.None,
                 entityLayer = CollisionLayer.Environment,
                 collidesWith = CollisionLayer.All,
-                bounciness = (fix)0.2f,
-                friction = (fix)0.3f
+                bounciness = (fp)0.2f,
+                friction = (fp)0.3f
             });
 
             entityManager.AddComponentData(wall, new StaticColliderComponent { isStatic = true });
@@ -303,7 +304,7 @@ namespace NoMoreEngine.Simulation.Bridge
             Debug.Log($"[SimulationInit] Created {spawnIndex} player entities");
         }
 
-        private Entity CreatePlayerEntity(PlayerSlot slot, fix3 spawnPosition)
+        private Entity CreatePlayerEntity(PlayerSlot slot, fp3 spawnPosition)
         {
             var entity = entityManager.CreateEntity();
 
@@ -311,8 +312,8 @@ namespace NoMoreEngine.Simulation.Bridge
             entityManager.AddComponentData(entity, new FixTransformComponent
             {
                 position = spawnPosition,
-                rotation = fixQuaternion.Identity,
-                scale = fix3.one
+                rotation = fpquaternion.identity,
+                scale = new fp3(fp.one)
             });
 
             entityManager.AddComponentData(entity, new SimEntityTypeComponent
@@ -323,16 +324,16 @@ namespace NoMoreEngine.Simulation.Bridge
             // Movement
             entityManager.AddComponentData(entity, new SimpleMovementComponent
             {
-                velocity = fix3.zero,
+                velocity = fp3.zero,
                 isMoving = false
             });
 
             // Collision
             entityManager.AddComponentData(entity, new CollisionBoundsComponent
             {
-                size = new fix3(1, 2, 1),
-                offset = fix3.zero,
-                tolerance = (fix)0.001f
+                size = new fp3(1, 2, 1),
+                offset = fp3.zero,
+                tolerance = (fp)0.001f
             });
 
             entityManager.AddComponentData(entity, new CollisionResponseComponent
@@ -340,8 +341,8 @@ namespace NoMoreEngine.Simulation.Bridge
                 responseType = CollisionResponse.Stop,
                 entityLayer = CollisionLayer.Player,
                 collidesWith = CollisionLayer.Environment | CollisionLayer.Enemy | CollisionLayer.Player,
-                bounciness = (fix)0.1f,
-                friction = (fix)0.2f
+                bounciness = (fp)0.1f,
+                friction = (fp)0.2f
             });
 
             entityManager.AddBuffer<CollisionEventBuffer>(entity);

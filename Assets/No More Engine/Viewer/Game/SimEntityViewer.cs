@@ -2,6 +2,7 @@ using Unity.Entities;
 using Unity.Collections;
 using UnityEngine;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.Viewer.Game
 {
@@ -56,9 +57,9 @@ namespace NoMoreEngine.Viewer.Game
         private void RenderSimEntity(Entity entity, FixTransformComponent transform, SimEntityTypeComponent entityType)
         {
             // Convert fixed-point to Unity types
-            Vector3 position = transform.position.ToUnityVec();
-            Quaternion rotation = transform.rotation.ToUnityQuat();
-            Vector3 scale = transform.scale.ToUnityVec();
+            Vector3 position = transform.position.ToVector3();
+            Quaternion rotation = transform.rotation.ToQuaternion();
+            Vector3 scale = transform.scale.ToVector3();
 
             // Get debug color for this entity type
             Color entityColor = GetEntityTypeColor(entityType.simEntityType);

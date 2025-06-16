@@ -11,11 +11,11 @@ namespace NoMoreEngine.Simulation.Components
     [Snapshotable(Priority = 0)] // Default priority, can be overridden by other components
     public struct FixTransformComponent : IComponentData, ISnapshotable<FixTransformComponent>
     {
-        public fix3 position;
-        public fixQuaternion rotation;
-        public fix3 scale;
+        public fp3 position;
+        public fpquaternion rotation;
+        public fp3 scale;
 
-        public FixTransformComponent(fix3 position, fixQuaternion rotation, fix3 scale)
+        public FixTransformComponent(fp3 position, fpquaternion rotation, fp3 scale)
         {
             this.position = position;
             this.rotation = rotation;
@@ -23,9 +23,9 @@ namespace NoMoreEngine.Simulation.Components
         }
 
         public static FixTransformComponent Identity => new FixTransformComponent(
-            fix3.zero,
-            fixQuaternion.Identity,
-            fix3.one
+            fp3.zero,
+            fpquaternion.identity,
+            new fp3(fp.zero)
             );
 
         // Isnapshottable implementation

@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.Session
@@ -110,21 +111,21 @@ namespace NoMoreEngine.Session
         /// <summary>
         /// Get spawn positions for the current stage
         /// </summary>
-        public fix3[] GetSpawnPositions()
+        public fp3[] GetSpawnPositions()
         {
             // For now, simple line formation
             // Later this would read from stage data
-            var positions = new List<fix3>();
+            var positions = new List<fp3>();
             int activeCount = GetActivePlayerCount();
 
             for (int i = 0; i < playerSlots.Length; i++)
             {
                 if (!playerSlots[i].IsEmpty)
                 {
-                    positions.Add(new fix3(
-                        (fix)(positions.Count * 3 - (activeCount - 1) * 1.5f),
-                        (fix)2,
-                        (fix)0
+                    positions.Add(new fp3(
+                        (fp)(positions.Count * 3 - (activeCount - 1) * 1.5f),
+                        (fp)2,
+                        (fp)0
                     ));
                 }
             }

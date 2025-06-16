@@ -6,6 +6,7 @@ using NoMoreEngine.Simulation.Systems;
 using NoMoreEngine.Simulation.Components;
 using NoMoreEngine.Input;
 using System.Collections.Generic;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.DevTools
 {
@@ -160,7 +161,7 @@ namespace NoMoreEngine.DevTools
                     
                     foreach (var transform in transforms)
                     {
-                        var pos = transform.position.ToUnityVec();
+                        var pos = transform.position.ToVector3();
                         Debug.DrawCube(pos, Quaternion.identity, 0.4f, currentPositionColor);
                     }
                     
@@ -185,7 +186,7 @@ namespace NoMoreEngine.DevTools
                     for (int i = 0; i < Mathf.Min(snapshotPositions.Count, transforms.Length); i++)
                     {
                         var snapPos = snapshotPositions[i];
-                        var currPos = transforms[i].position.ToUnityVec();
+                        var currPos = transforms[i].position.ToVector3();
                         
                         if (Vector3.Distance(snapPos, currPos) > 0.1f)
                         {
@@ -222,7 +223,7 @@ namespace NoMoreEngine.DevTools
             
             foreach (var transform in transforms)
             {
-                snapshotPositions.Add(transform.position.ToUnityVec());
+                snapshotPositions.Add(transform.position.ToVector3());
             }
             
             transforms.Dispose();
@@ -254,7 +255,7 @@ namespace NoMoreEngine.DevTools
             
             foreach (var transform in beforeTransforms)
             {
-                currentPositions.Add(transform.position.ToUnityVec());
+                currentPositions.Add(transform.position.ToVector3());
             }
             
             beforeTransforms.Dispose();
@@ -276,7 +277,7 @@ namespace NoMoreEngine.DevTools
                 for (int i = 0; i < Mathf.Min(currentPositions.Count, afterTransforms.Length); i++)
                 {
                     var before = currentPositions[i];
-                    var after = afterTransforms[i].position.ToUnityVec();
+                    var after = afterTransforms[i].position.ToVector3();
                     float distance = Vector3.Distance(before, after);
                     
                     if (distance > 0.01f)

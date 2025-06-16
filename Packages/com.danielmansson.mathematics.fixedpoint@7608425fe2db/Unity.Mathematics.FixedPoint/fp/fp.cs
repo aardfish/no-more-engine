@@ -20,6 +20,12 @@ namespace Unity.Mathematics.FixedPoint
         public static fp one => new fp(ONE);
         public static fp zero => new fp();
 
+        /// <summary>
+        /// The smallest positive fp value greater than zero.
+        /// This represents the precision of the Q31.32 fixed-point format (2^-32).
+        /// </summary>
+        //public static fp epsilon => new fp(1L);
+
         static fp Pi => new fp(PI);
         static fp PiOver2 => new fp(PI_OVER_2);
         static fp Log2Max => new fp(LOG2MAX);

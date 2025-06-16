@@ -3,6 +3,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.Simulation.Systems
 {
@@ -78,7 +79,7 @@ namespace NoMoreEngine.Simulation.Systems
         }
         
         [BurstCompile]
-        private void UpdateCollisionStates(ref SystemState state, fix deltaTime, uint currentTick)
+        private void UpdateCollisionStates(ref SystemState state, fp deltaTime, uint currentTick)
         {
             // Process entities with collision events
             foreach (var (collisionState, transform, movement, collisionEvents, entity) in 
@@ -87,13 +88,13 @@ namespace NoMoreEngine.Simulation.Systems
                 .WithEntityAccess())
             {
                 bool foundGround = false;
-                fix3 bestGroundNormal = fix3.zero;
-                fix3 bestContactPoint = fix3.zero;
-                fix maxNormalY = fix.Zero;
+                fp3 bestGroundNormal = fp3.zero;
+                fp3 bestContactPoint = fp3.zero;
+                fp maxNormalY = fp.zero;
                 
                 // Reset penetration state
                 collisionState.ValueRW.wasResolvingPenetration = false;
-                collisionState.ValueRW.penetrationDepth = fix.Zero;
+                collisionState.ValueRW.penetrationDepth = fp.zero;
                 
                 // Check all collision events for ground contact
                 for (int i = 0; i < collisionEvents.Length; i++)
@@ -102,10 +103,10 @@ namespace NoMoreEngine.Simulation.Systems
                     
                     // Determine which entity we are and get the correct normal
                     bool isEntityA = entity == collision.entityA;
-                    fix3 normal = isEntityA ? collision.contactNormal : -collision.contactNormal;
+                    fp3 normal = isEntityA ? collision.contactNormal : -collision.contactNormal;
                     
                     // Ground detection: normal pointing up (y > 0.7 ~= 45 degrees)
-                    if (normal.y > (fix)0.7f && normal.y > maxNormalY)
+                    if (normal.y > (fp)0.7f && normal.y > maxNormalY)
                     {
                         foundGround = true;
                         maxNormalY = normal.y;
@@ -114,7 +115,7 @@ namespace NoMoreEngine.Simulation.Systems
                     }
                     
                     // Track if we're resolving penetration
-                    if (collision.penetrationDepth > fix.Zero)
+                    if (collision.penetrationDepth > fp.zero)
                     {
                         collisionState.ValueRW.wasResolvingPenetration = true;
                         if (collision.penetrationDepth > collisionState.ValueRO.penetrationDepth)
@@ -131,7 +132,7 @@ namespace NoMoreEngine.Simulation.Systems
                     collisionState.ValueRW.isGrounded = true;
                     collisionState.ValueRW.groundNormal = bestGroundNormal;
                     collisionState.ValueRW.groundContactPoint = bestContactPoint;
-                    collisionState.ValueRW.timeSinceLastGrounded = fix.Zero;
+                    collisionState.ValueRW.timeSinceLastGrounded = fp.zero;
                     
                     // Store resolved position/velocity when grounded
                     collisionState.ValueRW.lastResolvedPosition = transform.ValueRO.position;
@@ -146,10 +147,10 @@ namespace NoMoreEngine.Simulation.Systems
                     
                     // But if we were grounded very recently and have minimal downward velocity,
                     // keep the ground contact info for one more frame (helps with bumpy surfaces)
-                    if (collisionState.ValueRO.timeSinceLastGrounded > deltaTime * (fix)2)
+                    if (collisionState.ValueRO.timeSinceLastGrounded > deltaTime * (fp)2)
                     {
-                        collisionState.ValueRW.groundNormal = new fix3(fix.Zero, fix.One, fix.Zero);
-                        collisionState.ValueRW.groundContactPoint = fix3.zero;
+                        collisionState.ValueRW.groundNormal = new fp3(fp.zero, fp.one, fp.zero);
+                        collisionState.ValueRW.groundContactPoint = fp3.zero;
                     }
                 }
             }
@@ -164,13 +165,13 @@ namespace NoMoreEngine.Simulation.Systems
                 collisionState.ValueRW.isGrounded = false;
                 collisionState.ValueRW.timeSinceLastGrounded += deltaTime;
                 collisionState.ValueRW.wasResolvingPenetration = false;
-                collisionState.ValueRW.penetrationDepth = fix.Zero;
+                collisionState.ValueRW.penetrationDepth = fp.zero;
                 
                 // Clear ground contact info after a short delay
-                if (collisionState.ValueRO.timeSinceLastGrounded > deltaTime * (fix)2)
+                if (collisionState.ValueRO.timeSinceLastGrounded > deltaTime * (fp)2)
                 {
-                    collisionState.ValueRW.groundNormal = new fix3(fix.Zero, fix.One, fix.Zero);
-                    collisionState.ValueRW.groundContactPoint = fix3.zero;
+                    collisionState.ValueRW.groundNormal = new fp3(fp.zero, fp.one, fp.zero);
+                    collisionState.ValueRW.groundContactPoint = fp3.zero;
                 }
             }
         }

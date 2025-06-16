@@ -4,6 +4,7 @@ using UnityEngine;
 using NoMoreEngine.Simulation.Components;
 using NoMoreEngine.Input;
 using Unity.Collections;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.Simulation.Systems
@@ -145,29 +146,29 @@ namespace NoMoreEngine.Simulation.Systems
                     {
                         // Convert input to movement
                         Vector2 motionVector = input.GetMotionVector();
-                        fix3 movementDirection = new fix3((fix)motionVector.x, (fix)0, (fix)motionVector.y);
+                        fp3 movementDirection = new fp3((fp)motionVector.x, (fp)0, (fp)motionVector.y);
 
                         // Normalize diagonal movement
-                        if (fixMath.lengthsq(movementDirection) > fix.Epsilon)
+                        if (fpmath.lengthsq(movementDirection) > fp.precision)
                         {
-                            movementDirection = fixMath.normalize(movementDirection);
+                            movementDirection = fpmath.normalize(movementDirection);
                         }
 
                         // Fixed movement speed
-                        fix moveSpeed = (fix)5;
+                        fp moveSpeed = (fp)5;
 
                         // Only modify horizontal velocity, preserve vertical (gravity)
-                        fix3 currentVelocity = movement.velocity;
-                        fix3 horizontalVelocity = movementDirection * moveSpeed;
+                        fp3 currentVelocity = movement.velocity;
+                        fp3 horizontalVelocity = movementDirection * moveSpeed;
 
                         // Preserve Y velocity (gravity), only change X and Z
-                        movement.velocity = new fix3(
+                        movement.velocity = new fp3(
                             horizontalVelocity.x,
                             currentVelocity.y,  // Keep existing Y velocity
                             horizontalVelocity.z
                         );
 
-                        movement.isMoving = fixMath.lengthsq(movementDirection) > fix.Epsilon;
+                        movement.isMoving = fpmath.lengthsq(movementDirection) > fp.precision;
 
                         // Handle jump with Action1 button
                         if (input.GetButton(InputButton.Action1))
@@ -179,7 +180,7 @@ namespace NoMoreEngine.Simulation.Systems
                     else
                     {
                         // No input for this player - stop horizontal movement
-                        movement.velocity = new fix3(fix.Zero, movement.velocity.y, fix.Zero);
+                        movement.velocity = new fp3(fp.zero, movement.velocity.y, fp.zero);
                         movement.isMoving = false;
                     }
                 })

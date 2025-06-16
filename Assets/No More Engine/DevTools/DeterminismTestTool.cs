@@ -6,6 +6,7 @@ using System.Text;
 using System.IO;
 using UnityEditor;
 using NoMoreEngine.Simulation.Components;
+using Unity.Mathematics.FixedPoint;
 
 
 namespace NoMoreEngine.DevTools
@@ -427,9 +428,9 @@ namespace NoMoreEngine.DevTools
     public struct EntityState
     {
         public int entityId;
-        public fix3 position;
-        public fixQuaternion rotation;
-        public fix3 scale;
+        public fp3 position;
+        public fpquaternion rotation;
+        public fp3 scale;
         public SimEntityType entityType;
     }
 }
