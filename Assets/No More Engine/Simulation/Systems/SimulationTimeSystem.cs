@@ -2,12 +2,13 @@ using Unity.Entities;
 using Unity.Collections;
 using UnityEngine;
 using NoMoreEngine.Simulation.Components;
+using System.Diagnostics;
 
 namespace NoMoreEngine.Simulation.Systems
 {
     /// <summary>
-    /// Core time management system that controls the fixed timestep simulation
-    /// Fixed to handle structural changes properly
+    /// Enhanced time system with performance monitoring
+    /// Keeps grace period functionality while adding metrics
     /// </summary>
     [UpdateInGroup(typeof(InitializationSystemGroup))]
     [UpdateAfter(typeof(BeginInitializationEntityCommandBufferSystem))]
@@ -22,13 +23,54 @@ namespace NoMoreEngine.Simulation.Systems
         // Track if we've initialized
         private bool isInitialized = false;
         
+        // Grace period handling
+        private float gracePeriodEndTime = 0f;
+        private const float STARTUP_GRACE_PERIOD = 0.5f;
+        private const float RESTORATION_GRACE_PERIOD = 0.2f;
+        
+        // NEW: Performance metrics
+        private Stopwatch tickStopwatch;
+        private double worstTickMs = 0;
+        private double totalTickMs = 0;
+        private int tickCount = 0;
+        private int slowTickCount = 0;
+        private const double TARGET_TICK_MS = 16.667;
+        private const double WARNING_TICK_MS = 14.0;
+        private const double CRITICAL_TICK_MS = 20.0;
+        
+        // NEW: Network readiness tracking
+        [System.Serializable]
+        public struct PerformanceMetrics
+        {
+            public double averageTickMs;
+            public double worstTickMs;
+            public int slowTickCount;
+            public int totalTicks;
+            public bool isNetworkReady;
+            
+            public void Reset()
+            {
+                averageTickMs = 0;
+                worstTickMs = 0;
+                slowTickCount = 0;
+                totalTicks = 0;
+                isNetworkReady = false;
+            }
+        }
+        
+        private PerformanceMetrics currentMetrics;
+        
         protected override void OnCreate()
         {
             // Get reference to fixed step group
             fixedStepGroup = World.GetOrCreateSystemManaged<SimulationStepSystemGroup>();
             
-            // Don't create entities here - wait until first update
-            // This avoids structural change issues
+            // Set initial grace period for startup
+            gracePeriodEndTime = UnityEngine.Time.time + STARTUP_GRACE_PERIOD;
+            
+            // NEW: Initialize performance tracking
+            tickStopwatch = new Stopwatch();
+            currentMetrics = new PerformanceMetrics();
         }
         
         protected override void OnStartRunning()
@@ -47,7 +89,7 @@ namespace NoMoreEngine.Simulation.Systems
             
             if (timeQuery.IsEmpty || accumulatorQuery.IsEmpty)
             {
-                Debug.Log("[SimulationTimeSystem] Creating time singleton entity");
+                UnityEngine.Debug.Log("[SimulationTimeSystem] Creating time singleton entity");
                 
                 var entity = EntityManager.CreateEntity();
                 EntityManager.SetName(entity, "SimulationTime");
@@ -75,14 +117,24 @@ namespace NoMoreEngine.Simulation.Systems
             // Use SystemAPI which handles structural changes automatically
             if (!SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time))
             {
-                Debug.LogError("[SimulationTimeSystem] SimulationTimeComponent not found!");
+                UnityEngine.Debug.LogError("[SimulationTimeSystem] SimulationTimeComponent not found!");
                 return;
             }
             
             if (!SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
             {
-                Debug.LogError("[SimulationTimeSystem] TimeAccumulatorComponent not found!");
+                UnityEngine.Debug.LogError("[SimulationTimeSystem] TimeAccumulatorComponent not found!");
                 return;
+            }
+            
+            // Check if we're in a grace period
+            bool inGracePeriod = UnityEngine.Time.time < gracePeriodEndTime;
+            
+            // During grace period, limit time accumulation to prevent catch-up spiral
+            if (inGracePeriod)
+            {
+                // Clamp delta time to prevent large accumulation
+                unityDeltaTime = Mathf.Min(unityDeltaTime, accumulator.fixedDeltaTime * 1.5f);
             }
             
             // Add frame time to accumulator
@@ -95,6 +147,9 @@ namespace NoMoreEngine.Simulation.Systems
             while (accumulator.ShouldStep() && 
                    stepsThisFrame < accumulator.maxCatchUpSteps)
             {
+                // NEW: Start performance measurement
+                tickStopwatch.Restart();
+                
                 // Advance simulation time
                 time.Step();
                 
@@ -103,6 +158,10 @@ namespace NoMoreEngine.Simulation.Systems
                 
                 // Run all simulation systems for this tick
                 RunSimulationStep(time.currentTick);
+                
+                // NEW: End performance measurement
+                tickStopwatch.Stop();
+                MeasureTickPerformance(time.currentTick, tickStopwatch.Elapsed.TotalMilliseconds, inGracePeriod);
                 
                 stepsThisFrame++;
             }
@@ -114,8 +173,8 @@ namespace NoMoreEngine.Simulation.Systems
             SystemAPI.SetSingleton(time);
             SystemAPI.SetSingleton(accumulator);
             
-            // Update performance stats
-            UpdatePerformanceStats(time.currentTick, unityDeltaTime);
+            // Update performance stats (suppress warnings during grace period)
+            UpdatePerformanceStats(time.currentTick, unityDeltaTime, !inGracePeriod);
         }
         
         private void RunSimulationStep(uint currentTick)
@@ -129,12 +188,58 @@ namespace NoMoreEngine.Simulation.Systems
             // Debug log every second
             if (currentTick % 60 == 0 && currentTick > 0)
             {
-                //Debug.Log($"[SimulationTimeSystem] Tick {currentTick}, " +
-                         //$"Elapsed: {currentTick / 60f:F2}s");
+                // NEW: Log performance summary
+                if (currentMetrics.totalTicks > 0)
+                {
+                    UnityEngine.Debug.Log($"[SimulationTimeSystem] Tick {currentTick}, " +
+                             $"Avg: {currentMetrics.averageTickMs:F2}ms, " +
+                             $"Worst: {currentMetrics.worstTickMs:F2}ms, " +
+                             $"Slow: {currentMetrics.slowTickCount}/{currentMetrics.totalTicks}");
+                }
             }
         }
         
-        private void UpdatePerformanceStats(uint currentTick, float unityDeltaTime)
+        // NEW: Measure individual tick performance
+        private void MeasureTickPerformance(uint tick, double tickMs, bool inGracePeriod)
+        {
+            // Update metrics
+            tickCount++;
+            totalTickMs += tickMs;
+            
+            if (tickMs > worstTickMs)
+            {
+                worstTickMs = tickMs;
+            }
+            
+            // Track slow ticks
+            if (tickMs > WARNING_TICK_MS)
+            {
+                slowTickCount++;
+                
+                // Log warnings for slow ticks (unless in grace period)
+                if (!inGracePeriod)
+                {
+                    if (tickMs > CRITICAL_TICK_MS)
+                    {
+                        UnityEngine.Debug.LogError($"[SimulationTimeSystem] CRITICAL: Tick {tick} took {tickMs:F2}ms!");
+                    }
+                    else
+                    {
+                        UnityEngine.Debug.LogWarning($"[SimulationTimeSystem] Slow tick {tick}: {tickMs:F2}ms");
+                    }
+                }
+            }
+            
+            // Update current metrics
+            currentMetrics.totalTicks = tickCount;
+            currentMetrics.averageTickMs = totalTickMs / tickCount;
+            currentMetrics.worstTickMs = worstTickMs;
+            currentMetrics.slowTickCount = slowTickCount;
+            currentMetrics.isNetworkReady = currentMetrics.averageTickMs < WARNING_TICK_MS && 
+                                          currentMetrics.worstTickMs < CRITICAL_TICK_MS;
+        }
+        
+        private void UpdatePerformanceStats(uint currentTick, float unityDeltaTime, bool showWarnings)
         {
             // Update FPS counter every second
             frameCount++;
@@ -147,10 +252,10 @@ namespace NoMoreEngine.Simulation.Systems
                 {
                     float simTickRate = timeComp.ticksThisSecond;
                     
-                    // Log performance if there's a mismatch
-                    if (Mathf.Abs(simTickRate - timeComp.tickRate) > 1)
+                    // Log performance if there's a mismatch (only if not in grace period)
+                    if (showWarnings && Mathf.Abs(simTickRate - timeComp.tickRate) > 1)
                     {
-                        Debug.LogWarning($"[SimulationTimeSystem] Tick rate mismatch! " +
+                        UnityEngine.Debug.LogWarning($"[SimulationTimeSystem] Tick rate mismatch! " +
                                        $"Target: {timeComp.tickRate}Hz, Actual: {simTickRate}Hz, " +
                                        $"FPS: {fps:F1}");
                     }
@@ -183,7 +288,7 @@ namespace NoMoreEngine.Simulation.Systems
                 }
             }
             
-            Debug.Log($"[SimulationTimeSystem] Simulation {(paused ? "paused" : "resumed")}");
+            UnityEngine.Debug.Log($"[SimulationTimeSystem] Simulation {(paused ? "paused" : "resumed")}");
         }
         
         /// <summary>
@@ -203,7 +308,7 @@ namespace NoMoreEngine.Simulation.Systems
         /// </summary>
         public void ResetSimulationTime()
         {
-            Debug.Log("[SimulationTimeSystem] Resetting simulation time");
+            UnityEngine.Debug.Log("[SimulationTimeSystem] Resetting simulation time");
             
             if (SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time) &&
                 SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
@@ -216,6 +321,45 @@ namespace NoMoreEngine.Simulation.Systems
                 accumulator.Reset();
                 SystemAPI.SetSingleton(accumulator);
             }
+            
+            // NEW: Reset performance metrics
+            currentMetrics.Reset();
+            tickCount = 0;
+            totalTickMs = 0;
+            worstTickMs = 0;
+            slowTickCount = 0;
+        }
+        
+        /// <summary>
+        /// Set a grace period after heavy operations like snapshot restoration
+        /// </summary>
+        public void SetGracePeriod(float duration)
+        {
+            gracePeriodEndTime = UnityEngine.Time.time + duration;
+            
+            // Also reset accumulator to prevent catch-up
+            if (SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
+            {
+                accumulator.Reset();
+                SystemAPI.SetSingleton(accumulator);
+            }
+            
+            UnityEngine.Debug.Log($"[SimulationTimeSystem] Grace period set for {duration}s");
+        }
+        
+        // NEW: Public API for performance monitoring
+        public PerformanceMetrics GetPerformanceMetrics() => currentMetrics;
+        
+        public bool IsNetworkReady() => currentMetrics.isNetworkReady;
+        
+        public void LogPerformanceReport()
+        {
+            UnityEngine.Debug.Log($"[SimulationTimeSystem] Performance Report:\n" +
+                $"  Total Ticks: {currentMetrics.totalTicks}\n" +
+                $"  Average Tick: {currentMetrics.averageTickMs:F2}ms\n" +
+                $"  Worst Tick: {currentMetrics.worstTickMs:F2}ms\n" +
+                $"  Slow Ticks: {currentMetrics.slowTickCount} ({(float)currentMetrics.slowTickCount/currentMetrics.totalTicks*100:F1}%)\n" +
+                $"  Network Ready: {currentMetrics.isNetworkReady}");
         }
     }
 }

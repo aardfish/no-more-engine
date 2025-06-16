@@ -608,6 +608,7 @@ GameObject:
   - component: {fileID: 883739446}
   - component: {fileID: 883739448}
   - component: {fileID: 883739447}
+  - component: {fileID: 883739449}
   m_Layer: 0
   m_Name: Simulation
   m_TagString: Untagged
@@ -663,6 +664,24 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   autoInitialize: 1
   createDefaultGravity: 1
+--- !u!114 &883739449
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 883739444}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 52edec930b7221f41b0ffae65c00a99e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  showMonitor: 1
+  showDetailedMetrics: 1
+  showNetworkReadiness: 1
+  toggleButton: 11
+  warningThresholdMs: 14
+  criticalThresholdMs: 20
 --- !u!1 &1534994480
 GameObject:
   m_ObjectHideFlags: 0
