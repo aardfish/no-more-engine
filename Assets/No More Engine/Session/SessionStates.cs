@@ -3,12 +3,11 @@ using System;
 using NoMoreEngine.Input;
 using NoMoreEngine.Simulation.Bridge;
 
-
 namespace NoMoreEngine.Session
 {
     /// <summary>
     /// Base class for session states with common functionality
-    /// Uses centralized InputProcessor for all input processing
+    /// Now uses NoMoreInput API for clean, frame-accurate input
     /// </summary>
     public abstract class SessionStateBase : ISessionState
     {
@@ -23,45 +22,23 @@ namespace NoMoreEngine.Session
         public virtual void OnEnter()
         {
             stateTime = 0f;
-
-            // Subscribe to processed input
-            var processor = InputProcessor.Instance;
-            if (processor != null)
-            {
-                processor.OnInputFramesReady += HandleInputFrames;
-            }
-            else
-            {
-                Debug.LogError("[SessionState] InputProcessor not found! States require InputProcessor for input handling.");
-            }
         }
 
         public virtual void OnExit()
         {
-            // Unsubscribe from processed input
-            var processor = InputProcessor.Instance;
-            if (processor != null)
-            {
-                processor.OnInputFramesReady -= HandleInputFrames;
-            }
+            // Clean exit - no more callback cleanup needed!
         }
 
         public virtual void Update(float deltaTime)
         {
             stateTime += deltaTime;
+            
+            // Handle input in Update() using NoMoreInput
+            HandleInput();
         }
 
-        protected virtual void HandleInputFrames(PlayerInputFrame[] frames)
-        {
-            // Handle P1 input by default
-            if (frames.Length > 0)
-            {
-                HandleProcessedInput(frames[0]);
-            }
-        }
-
-        // Derived classes implement this to handle processed input
-        protected abstract void HandleProcessedInput(PlayerInputFrame input);
+        // Derived classes implement this for state-specific input handling
+        protected abstract void HandleInput();
     }
 
     /// <summary>
@@ -69,10 +46,11 @@ namespace NoMoreEngine.Session
     /// </summary>
     public class MainMenuState : SessionStateBase
     {
-        protected override void HandleProcessedInput(PlayerInputFrame input)
+        protected override void HandleInput()
         {
-            // Press Action1 (Space/A) or Menu1 (Enter/Start) to start
-            if (input.GetButtonDown(InputButton.Action1) || input.GetButtonDown(InputButton.Menu1))
+            // Check for any player wanting to start
+            if (NoMoreInput.AnyButtonDown(InputButton.Action1) || 
+                NoMoreInput.AnyButtonDown(InputButton.Menu1))
             {
                 StartQuickMatch();
             }
@@ -123,11 +101,9 @@ namespace NoMoreEngine.Session
                 context.gameConfig.AddPlayer(PlayerType.Local, 0);
             }
 
-            // Reset countdown
+            // Reset state
             readyCountdown = -1f;
             navigationCooldownTimer = 0f;
-
-            // Set default stage
             selectedStageIndex = 0;
             UpdateGameConfig();
         }
@@ -154,10 +130,12 @@ namespace NoMoreEngine.Session
             }
         }
 
-        protected override void HandleProcessedInput(PlayerInputFrame input)
+        protected override void HandleInput()
         {
+            var player = NoMoreInput.Player1;
+
             // Cancel countdown on any button press
-            if (readyCountdown >= 0f && input.HasAnyButtonPress())
+            if (readyCountdown >= 0f && player.PressedAny())
             {
                 Debug.Log("[MissionLobby] Countdown cancelled");
                 readyCountdown = -1f;
@@ -167,28 +145,15 @@ namespace NoMoreEngine.Session
             // Handle navigation with cooldown
             if (navigationCooldownTimer <= 0f)
             {
-                Vector2 navigationInput = Vector2.zero;
-
-                // Prioritize D-pad/arrows for menu navigation
-                if (input.Pad != 5)
-                {
-                    navigationInput = input.GetPadVector();
-                }
-                // Fall back to motion axis (WASD/left stick) if no pad input
-                else if (input.MotionAxis != 5)
-                {
-                    navigationInput = input.GetMotionVector();
-                }
-
-                // Navigate stages vertically
-                if (navigationInput.y > 0.5f && selectedStageIndex > 0)
+                // Use convenience navigation properties
+                if (player.NavigateUp && selectedStageIndex > 0)
                 {
                     selectedStageIndex--;
                     UpdateGameConfig();
                     navigationCooldownTimer = NAVIGATION_COOLDOWN;
                     Debug.Log($"[MissionLobby] Selected: {availableStages[selectedStageIndex]}");
                 }
-                else if (navigationInput.y < -0.5f && selectedStageIndex < availableStages.Length - 1)
+                else if (player.NavigateDown && selectedStageIndex < availableStages.Length - 1)
                 {
                     selectedStageIndex++;
                     UpdateGameConfig();
@@ -197,26 +162,14 @@ namespace NoMoreEngine.Session
                 }
             }
 
-            // Launch mission with Action1 (Space/A)
-            if (input.GetButtonDown(InputButton.Action1))
+            // Start mission using convenience property
+            if (player.Confirm)
             {
                 StartCountdown();
             }
 
-            // Alternative confirm with Menu1 (Enter/Start)
-            if (input.GetButtonDown(InputButton.Menu1))
-            {
-                StartCountdown();
-            }
-
-            // Back to menu with Action2 (F/B)
-            if (input.GetButtonDown(InputButton.Action2))
-            {
-                context.coordinator.TransitionTo(SessionStateType.MainMenu);
-            }
-
-            // Alternative back with Menu2 (Tab/Select)
-            if (input.GetButtonDown(InputButton.Menu2))
+            // Back to menu using convenience property
+            if (player.Cancel)
             {
                 context.coordinator.TransitionTo(SessionStateType.MainMenu);
             }
@@ -305,10 +258,10 @@ namespace NoMoreEngine.Session
             base.OnExit();
         }
 
-        protected override void HandleProcessedInput(PlayerInputFrame input)
+        protected override void HandleInput()
         {
-            // Press Menu1 (Esc/Start) to end game and go to results
-            if (input.GetButtonDown(InputButton.Menu1))
+            // Check all players for pause menu
+            if (NoMoreInput.AnyButtonDown(InputButton.Menu1))
             {
                 EndGame();
             }
@@ -332,8 +285,6 @@ namespace NoMoreEngine.Session
             {
                 Debug.Log("[InGame] Creating SimulationInitializer");
                 var initObject = new GameObject("SimulationInitializer");
-                initObject.transform.SetParent(null);
-                initObject.transform.position = Vector3.zero;
                 simulationInit = initObject.AddComponent<SimulationInitializer>();
                 createdBridgeObjects = true;
             }
@@ -342,8 +293,6 @@ namespace NoMoreEngine.Session
             {
                 Debug.Log("[InGame] Creating SimulationController");
                 var controlObject = new GameObject("SimulationController");
-                controlObject.transform.SetParent(null);
-                controlObject.transform.position = Vector3.zero;
                 simulationControl = controlObject.AddComponent<SimulationController>();
                 createdBridgeObjects = true;
             }
@@ -387,12 +336,23 @@ namespace NoMoreEngine.Session
     /// </summary>
     public class ResultsState : SessionStateBase
     {
-        protected override void HandleProcessedInput(PlayerInputFrame input)
+        private float minDisplayTime = 1f; // Minimum time before allowing exit
+        
+        public override void OnEnter()
         {
-            // Press any button to return to menu
-            if (input.GetButtonDown(InputButton.Action1) ||
-                input.GetButtonDown(InputButton.Action2) ||
-                input.GetButtonDown(InputButton.Menu1))
+            base.OnEnter();
+            Debug.Log("[Results] Showing results screen");
+        }
+
+        protected override void HandleInput()
+        {
+            // Wait a minimum time before allowing exit
+            if (stateTime < minDisplayTime) return;
+
+            // Check any player wanting to continue
+            if (NoMoreInput.AnyButtonDown(InputButton.Action1) ||
+                NoMoreInput.AnyButtonDown(InputButton.Action2) ||
+                NoMoreInput.AnyButtonDown(InputButton.Menu1))
             {
                 ReturnToMenu();
             }
@@ -402,6 +362,184 @@ namespace NoMoreEngine.Session
         {
             Debug.Log("[Results] Returning to main menu");
             context.coordinator.TransitionTo(SessionStateType.MainMenu);
+        }
+    }
+
+    /// <summary>
+    /// Pause State - Game paused
+    /// </summary>
+    public class PauseState : SessionStateBase
+    {
+        private SessionStateType previousState;
+
+        public override void Initialize(SessionContext context)
+        {
+            base.Initialize(context);
+        }
+
+        public void SetPreviousState(SessionStateType state)
+        {
+            previousState = state;
+        }
+
+        public override void OnEnter()
+        {
+            base.OnEnter();
+            Debug.Log("[Pause] Game paused");
+            
+            // Pause the simulation
+            var simControl = GameObject.FindAnyObjectByType<SimulationController>();
+            simControl?.PauseSimulation();
+        }
+
+        public override void OnExit()
+        {
+            base.OnExit();
+            
+            // Resume the simulation
+            var simControl = GameObject.FindAnyObjectByType<SimulationController>();
+            simControl?.ResumeSimulation();
+        }
+
+        protected override void HandleInput()
+        {
+            var player = NoMoreInput.Player1;
+
+            // Resume on menu button or cancel
+            if (player.GetButtonDown(InputButton.Menu1) || player.Cancel)
+            {
+                Resume();
+            }
+
+            // Quit to menu on specific button
+            if (player.GetButtonDown(InputButton.Menu2))
+            {
+                QuitToMenu();
+            }
+        }
+
+        private void Resume()
+        {
+            Debug.Log("[Pause] Resuming game");
+            context.coordinator.TransitionTo(previousState);
+        }
+
+        private void QuitToMenu()
+        {
+            Debug.Log("[Pause] Quitting to main menu");
+            context.coordinator.TransitionTo(SessionStateType.MainMenu);
+        }
+    }
+
+    /// <summary>
+    /// Versus Lobby State - Multiplayer setup
+    /// </summary>
+    public class VersusLobbyState : SessionStateBase
+    {
+        private float[] playerJoinTimers = new float[4];
+        private const float JOIN_COOLDOWN = 0.5f;
+
+        public override void OnEnter()
+        {
+            base.OnEnter();
+            Debug.Log("[VersusLobby] Entered versus lobby");
+            
+            // Reset timers
+            for (int i = 0; i < 4; i++)
+            {
+                playerJoinTimers[i] = 0f;
+            }
+        }
+
+        public override void Update(float deltaTime)
+        {
+            base.Update(deltaTime);
+            
+            // Update cooldown timers
+            for (int i = 0; i < 4; i++)
+            {
+                if (playerJoinTimers[i] > 0f)
+                    playerJoinTimers[i] -= deltaTime;
+            }
+        }
+
+        protected override void HandleInput()
+        {
+            // Check each player for join/leave
+            for (byte i = 0; i < 4; i++)
+            {
+                var player = NoMoreInput.GetPlayer(i);
+                var slot = context.gameConfig.playerSlots[i];
+                
+                if (playerJoinTimers[i] <= 0f)
+                {
+                    if (slot.IsEmpty)
+                    {
+                        // Join with Action1
+                        if (player.GetButtonDown(InputButton.Action1))
+                        {
+                            JoinPlayer(i);
+                            playerJoinTimers[i] = JOIN_COOLDOWN;
+                        }
+                    }
+                    else if (slot.IsLocal)
+                    {
+                        // Leave with Action2
+                        if (player.GetButtonDown(InputButton.Action2))
+                        {
+                            LeavePlayer(i);
+                            playerJoinTimers[i] = JOIN_COOLDOWN;
+                        }
+                        
+                        // Toggle ready with Action1
+                        if (player.GetButtonDown(InputButton.Action1))
+                        {
+                            ToggleReady(i);
+                            playerJoinTimers[i] = JOIN_COOLDOWN;
+                        }
+                    }
+                }
+            }
+            
+            // P1 can start if all ready
+            if (NoMoreInput.Player1.GetButtonDown(InputButton.Menu1))
+            {
+                if (context.gameConfig.AreAllPlayersReady())
+                {
+                    StartMatch();
+                }
+            }
+            
+            // P1 can go back
+            if (NoMoreInput.Player1.Cancel)
+            {
+                context.coordinator.TransitionTo(SessionStateType.MainMenu);
+            }
+        }
+
+        private void JoinPlayer(byte playerIndex)
+        {
+            Debug.Log($"[VersusLobby] Player {playerIndex + 1} joined");
+            context.gameConfig.AddPlayer(PlayerType.Local, playerIndex);
+        }
+
+        private void LeavePlayer(byte playerIndex)
+        {
+            Debug.Log($"[VersusLobby] Player {playerIndex + 1} left");
+            context.gameConfig.RemovePlayer(playerIndex);
+        }
+
+        private void ToggleReady(byte playerIndex)
+        {
+            var slot = context.gameConfig.playerSlots[playerIndex];
+            slot.isReady = !slot.isReady;
+            Debug.Log($"[VersusLobby] Player {playerIndex + 1} ready: {slot.isReady}");
+        }
+
+        private void StartMatch()
+        {
+            Debug.Log("[VersusLobby] Starting versus match");
+            context.coordinator.TransitionTo(SessionStateType.InGame);
         }
     }
 }

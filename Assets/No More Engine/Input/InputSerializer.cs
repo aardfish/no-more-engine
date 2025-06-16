@@ -3,7 +3,6 @@ using UnityEngine.InputSystem;
 using System.Collections.Generic;
 using System.Linq;
 
-
 namespace NoMoreEngine.Input
 {
     /// <summary>
@@ -25,8 +24,8 @@ namespace NoMoreEngine.Input
         [SerializeField] private bool debugMouseInput = false;
 
         // Input device management
-        private PlayerInput primaryPlayerInput;
-        private List<PlayerInput> localPlayers = new List<PlayerInput>();
+        private UnityEngine.InputSystem.PlayerInput primaryPlayerInput;
+        private List<UnityEngine.InputSystem.PlayerInput> localPlayers = new List<UnityEngine.InputSystem.PlayerInput>();
 
         // Input buffering
         private Dictionary<byte, Queue<InputSample>> playerInputBuffers = new Dictionary<byte, Queue<InputSample>>();
@@ -54,10 +53,10 @@ namespace NoMoreEngine.Input
             }
 
             // Initialize primary player
-            primaryPlayerInput = GetComponent<PlayerInput>();
+            primaryPlayerInput = GetComponent<UnityEngine.InputSystem.PlayerInput>();
             if (primaryPlayerInput == null)
             {
-                primaryPlayerInput = gameObject.AddComponent<PlayerInput>();
+                primaryPlayerInput = gameObject.AddComponent<UnityEngine.InputSystem.PlayerInput>();
             }
 
             // Assign the input actions asset
@@ -87,7 +86,7 @@ namespace NoMoreEngine.Input
         /// <summary>
         /// Setup input action references for a player
         /// </summary>
-        private void SetupPlayerInput(PlayerInput playerInput, byte playerIndex)
+        private void SetupPlayerInput(UnityEngine.InputSystem.PlayerInput playerInput, byte playerIndex)
         {
             if (inputActionAsset != null)
             {
@@ -102,7 +101,7 @@ namespace NoMoreEngine.Input
         /// <summary>
         /// Register a new local player
         /// </summary>
-        public void RegisterPlayer(PlayerInput playerInput, byte playerIndex)
+        public void RegisterPlayer(UnityEngine.InputSystem.PlayerInput playerInput, byte playerIndex)
         {
             if (!localPlayers.Contains(playerInput))
             {
@@ -137,7 +136,7 @@ namespace NoMoreEngine.Input
         /// <summary>
         /// Sample input from a specific player and convert to InputPacket
         /// </summary>
-        private InputPacket SamplePlayerInput(PlayerInput playerInput, byte playerIndex)
+        private InputPacket SamplePlayerInput(UnityEngine.InputSystem.PlayerInput playerInput, byte playerIndex)
         {
             // Motion Axis (WASD/Left Stick)
             Vector2 motionInput = Vector2.zero;
@@ -221,7 +220,7 @@ namespace NoMoreEngine.Input
         /// <summary>
         /// Check if a specific button is pressed for a player
         /// </summary>
-        private bool IsButtonPressed(PlayerInput playerInput, InputButton button)
+        private bool IsButtonPressed(UnityEngine.InputSystem.PlayerInput playerInput, InputButton button)
         {
             if (playerInput.actions == null) return false;
 

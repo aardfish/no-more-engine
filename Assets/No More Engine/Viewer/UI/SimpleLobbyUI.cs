@@ -77,7 +77,7 @@ namespace NoMoreEngine.Viewer.UI
             var gameConfig = coordinator.GetGameConfig();
             var currentState = coordinator.GetCurrentState() as MissionLobbyState;
 
-            GUILayout.BeginArea(new Rect(50, 50, 400, 500));
+            GUILayout.BeginArea(new Rect(Screen.width/2 - 200, Screen.height/2 - 250, 400, 500));
             GUILayout.BeginVertical("box");
 
             GUILayout.Label("MISSION LOBBY", GetTitleStyle());

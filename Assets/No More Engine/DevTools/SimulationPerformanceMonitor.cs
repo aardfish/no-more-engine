@@ -23,7 +23,6 @@ namespace NoMoreEngine.DevTools
         [SerializeField] private float criticalThresholdMs = 20.0f;
         
         private SimulationTimeSystem timeSystem;
-        private InputProcessor inputProcessor;
         private GUIStyle titleStyle;
         private GUIStyle normalStyle;
         private GUIStyle warningStyle;
@@ -35,9 +34,6 @@ namespace NoMoreEngine.DevTools
         private float metricsUpdateInterval = 0.5f;
         private float lastMetricsUpdate;
         
-        // Input handling
-        private bool shouldToggle = false;
-        
         void Start()
         {
             var world = World.DefaultGameObjectInjectionWorld;
@@ -45,51 +41,14 @@ namespace NoMoreEngine.DevTools
             {
                 timeSystem = world.GetExistingSystemManaged<SimulationTimeSystem>();
             }
-            
-            // Connect to input system
-            inputProcessor = InputProcessor.Instance;
-            if (inputProcessor != null)
-            {
-                inputProcessor.OnInputFramesReady += HandleInput;
-            }
-            else
-            {
-                Debug.LogWarning("[PerformanceMonitor] InputProcessor not found - toggle disabled");
-            }
-            
-            InitializeStyles();
-        }
-        
-        void OnDestroy()
-        {
-            // Unsubscribe from input system
-            if (inputProcessor != null)
-            {
-                inputProcessor.OnInputFramesReady -= HandleInput;
-            }
-        }
-        
-        private void HandleInput(PlayerInputFrame[] frames)
-        {
-            // Check P1 input for toggle
-            if (frames.Length > 0)
-            {
-                var input = frames[0];
-                if (input.GetButtonDown(toggleButton))
-                {
-                    // Set flag to toggle in Update() - can't do GUI operations here
-                    shouldToggle = true;
-                }
-            }
         }
         
         void Update()
         {
             // Process toggle request from input system
-            if (shouldToggle)
+            if (NoMoreInput.Player1.GetButtonDown(toggleButton))
             {
                 showMonitor = !showMonitor;
-                shouldToggle = false;
                 Debug.Log($"[PerformanceMonitor] Toggled to: {showMonitor}");
             }
             
@@ -104,7 +63,7 @@ namespace NoMoreEngine.DevTools
         void OnGUI()
         {
             if (!showMonitor || timeSystem == null) return;
-            
+
             // Initialize styles if needed (first OnGUI call)
             if (titleStyle == null)
             {
@@ -112,10 +71,10 @@ namespace NoMoreEngine.DevTools
             }
             
             // Draw background
-            GUI.Box(new Rect(Screen.width - 310, 10, 300, showDetailedMetrics ? 280 : 150), "");
+            GUI.Box(new Rect(Screen.width - 310, 10, 300, showDetailedMetrics ? 320 : 150), "");
             
-            GUILayout.BeginArea(new Rect(Screen.width - 305, 15, 290, showDetailedMetrics ? 270 : 140));
-            
+            GUILayout.BeginArea(new Rect(Screen.width - 305, 15, 290, showDetailedMetrics ? 300 : 140));
+
             // Title
             GUILayout.Label("SIMULATION PERFORMANCE", titleStyle);
             GUILayout.Space(5);
@@ -129,17 +88,18 @@ namespace NoMoreEngine.DevTools
             
             // Basic metrics
             DrawBasicMetrics();
-            
+
             // Detailed metrics
             if (showDetailedMetrics)
             {
                 GUILayout.Space(10);
                 DrawDetailedMetrics();
+                GUILayout.Space(10);
             }
             
             // Controls hint
             GUILayout.FlexibleSpace();
-            GUILayout.Label($"Press {GetButtonDisplayName(toggleButton)} to toggle", normalStyle);
+            GUILayout.Label($"Press {toggleButton.GetDisplayName()} to toggle", normalStyle);
             
             GUILayout.EndArea();
         }
@@ -193,25 +153,26 @@ namespace NoMoreEngine.DevTools
                 : 0;
             DrawMetricBar("Slow Ticks", slowPercentage, 0, 100, "%");
         }
-        
+
         private void DrawDetailedMetrics()
         {
             GUILayout.Label("DETAILED STATS", titleStyle);
-            
+
             // Total ticks
             GUILayout.Label($"Total Ticks: {lastMetrics.totalTicks:N0}", normalStyle);
-            
+
             // Slow tick count
             GUI.color = lastMetrics.slowTickCount > 0 ? Color.yellow : Color.white;
             GUILayout.Label($"Slow Ticks: {lastMetrics.slowTickCount}", normalStyle);
             GUI.color = Color.white;
-            
+
             // Target vs actual
             GUILayout.Space(5);
             GUILayout.Label("TARGET PERFORMANCE", titleStyle);
             DrawTargetComparison("60Hz Target", 16.67f, (float)lastMetrics.averageTickMs);
             DrawTargetComparison("Network Safe", warningThresholdMs, (float)lastMetrics.averageTickMs);
             DrawTargetComparison("Critical", criticalThresholdMs, (float)lastMetrics.worstTickMs);
+            GUILayout.Space(10);
         }
         
         private void DrawMetricBar(string label, float value, float min, float max, string suffix = "ms")
@@ -345,26 +306,6 @@ namespace NoMoreEngine.DevTools
             }
             
             Debug.Log("[PerformanceMonitor] Created 100 test entities to simulate load");
-        }
-        
-        private string GetButtonDisplayName(InputButton button)
-        {
-            return button switch
-            {
-                InputButton.Action1 => "A/Space",
-                InputButton.Action2 => "B/F",
-                InputButton.Action3 => "X/E",
-                InputButton.Action4 => "Y/Q",
-                InputButton.Action5 => "LB/Shift",
-                InputButton.Action6 => "RB/C",
-                InputButton.Trigger1 => "RT/LMouse",
-                InputButton.Trigger2 => "LT/RMouse",
-                InputButton.Aux1 => "LZ/L.Ctrl",
-                InputButton.Aux2 => "RZ/L.Alt",
-                InputButton.Menu1 => "Menu/Esc",
-                InputButton.Menu2 => "View/Tab",
-                _ => button.ToString()
-            };
         }
     }
 }

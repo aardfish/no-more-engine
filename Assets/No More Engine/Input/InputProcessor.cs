@@ -1,38 +1,34 @@
 using UnityEngine;
 using System.Collections.Generic;
-using System.Linq;
 using Unity.Entities;
-
 
 namespace NoMoreEngine.Input
 {
     /// <summary>
-    /// InputProcessor - Centralized service for processing raw InputPackets
-    /// Provides edge detection, input buffering, and other interpretation features
-    /// Sits between InputSerializer and all input consumers
+    /// Enhanced InputProcessor with Unity frame-based edge detection
+    /// Processes raw InputPackets and provides frame-accurate button states
     /// </summary>
     public class InputProcessor : MonoBehaviour
     {
         [Header("Settings")]
-        [SerializeField] private int inputHistorySize = 60; // 1 second at 60fps
-        [SerializeField] private bool debugLogging = false;
+        [SerializeField] private int inputHistorySize = 60;
+        //[SerializeField] private bool debugLogging = false;
 
         // Input source
         private InputSerializer inputSerializer;
 
-        // Player input states
+        // Per-player input states
         private Dictionary<byte, PlayerInputState> playerStates = new Dictionary<byte, PlayerInputState>();
 
-        // Events
-        public System.Action<PlayerInputFrame[]> OnInputFramesReady;
-
+        // Unity frame tracking
+        private int lastProcessedFrame = -1;
+        
         // Singleton for easy access
         private static InputProcessor instance;
         public static InputProcessor Instance => instance;
 
         void Awake()
         {
-            // Simple singleton
             if (instance != null && instance != this)
             {
                 Destroy(gameObject);
@@ -70,246 +66,245 @@ namespace NoMoreEngine.Input
             }
         }
 
+        void Update()
+        {
+            // Process Unity frame edge detection
+            if (Time.frameCount != lastProcessedFrame)
+            {
+                ProcessUnityFrameEdgeDetection();
+                lastProcessedFrame = Time.frameCount;
+            }
+        }
+
         /// <summary>
-        /// Process raw input packets and generate interpreted frames
+        /// Process Unity frame-based edge detection
+        /// This runs once per Unity frame to ensure accurate button up/down detection
+        /// </summary>
+        private void ProcessUnityFrameEdgeDetection()
+        {
+            foreach (var playerState in playerStates.Values)
+            {
+                playerState.ProcessUnityFrame();
+            }
+        }
+
+        /// <summary>
+        /// Process raw input packets from InputSerializer
         /// </summary>
         private void ProcessInputPackets(InputPacket[] packets)
         {
-            var interpretedFrames = new List<PlayerInputFrame>();
-
             foreach (var packet in packets)
             {
                 // Get or create player state
-                if (!playerStates.ContainsKey(packet.playerIndex))
+                if (!playerStates.TryGetValue(packet.playerIndex, out var playerState))
                 {
-                    playerStates[packet.playerIndex] = new PlayerInputState(packet.playerIndex, inputHistorySize);
+                    playerState = new PlayerInputState(packet.playerIndex, inputHistorySize);
+                    playerStates[packet.playerIndex] = playerState;
                 }
 
-                var playerState = playerStates[packet.playerIndex];
-
-                // Process the packet to generate interpreted frame
-                var frame = playerState.ProcessPacket(packet);
-                interpretedFrames.Add(frame);
-
-                if (debugLogging && frame.HasAnyButtonPress())
-                {
-                    Debug.Log($"[InputProcessor] P{packet.playerIndex} pressed: {GetButtonNames(frame.ButtonsPressed)}");
-                }
+                // Update with latest packet
+                playerState.UpdateFromPacket(packet);
             }
-
-            // Notify consumers
-            OnInputFramesReady?.Invoke(interpretedFrames.ToArray());
         }
 
         /// <summary>
-        /// Get the current input state for a specific player
+        /// Get current button state for a player
         /// </summary>
-        public PlayerInputFrame GetCurrentInput(byte playerIndex)
+        public bool GetButton(byte playerIndex, InputButton button)
         {
-            if (playerStates.ContainsKey(playerIndex))
+            if (playerStates.TryGetValue(playerIndex, out var state))
             {
-                return playerStates[playerIndex].CurrentFrame;
+                return state.GetButton(button);
             }
-            return new PlayerInputFrame();
+            return false;
         }
 
         /// <summary>
-        /// Get input history for a specific player
+        /// Get if button was pressed this Unity frame
         /// </summary>
-        public InputPacket[] GetInputHistory(byte playerIndex, int frameCount)
+        public bool GetButtonDown(byte playerIndex, InputButton button)
         {
-            if (playerStates.ContainsKey(playerIndex))
+            if (playerStates.TryGetValue(playerIndex, out var state))
             {
-                return playerStates[playerIndex].GetHistory(frameCount);
+                return state.GetButtonDown(button);
             }
-            return new InputPacket[0];
+            return false;
         }
 
         /// <summary>
-        /// Check if a button was pressed within a time window (for input buffering)
+        /// Get if button was released this Unity frame
         /// </summary>
-        public bool WasButtonPressedRecently(byte playerIndex, InputButton button, float timeWindow)
+        public bool GetButtonUp(byte playerIndex, InputButton button)
         {
-            if (!playerStates.ContainsKey(playerIndex))
-                return false;
-
-            int framesToCheck = Mathf.CeilToInt(timeWindow * 60f); // Assuming 60fps
-            return playerStates[playerIndex].WasButtonPressedInLastFrames(button, framesToCheck);
+            if (playerStates.TryGetValue(playerIndex, out var state))
+            {
+                return state.GetButtonUp(button);
+            }
+            return false;
         }
 
-        // Remove these fields - we don't need to track entities here
-        // private Dictionary<byte, Entity> playerEntities = new Dictionary<byte, Entity>();
-        // private Dictionary<Entity, byte> entityToPlayer = new Dictionary<Entity, byte>();
+        /// <summary>
+        /// Get motion input for a player
+        /// </summary>
+        public Vector2 GetMotion(byte playerIndex)
+        {
+            if (playerStates.TryGetValue(playerIndex, out var state))
+            {
+                return state.GetMotion();
+            }
+            return Vector2.zero;
+        }
 
-        // Simplify RegisterPlayerEntity to just handle input state
+        /// <summary>
+        /// Get view input for a player
+        /// </summary>
+        public Vector2 GetView(byte playerIndex)
+        {
+            if (playerStates.TryGetValue(playerIndex, out var state))
+            {
+                return state.GetView();
+            }
+            return Vector2.zero;
+        }
+
+        /// <summary>
+        /// Get pad input for a player
+        /// </summary>
+        public Vector2 GetPad(byte playerIndex)
+        {
+            if (playerStates.TryGetValue(playerIndex, out var state))
+            {
+                return state.GetPad();
+            }
+            return Vector2.zero;
+        }
+
+        /// <summary>
+        /// Register player entity (for compatibility)
+        /// </summary>
         public void RegisterPlayerEntity(Entity entity, byte playerIndex)
         {
             if (!playerStates.ContainsKey(playerIndex))
             {
-                Debug.Log($"[InputProcessor] Creating new input state for player {playerIndex}");
                 playerStates[playerIndex] = new PlayerInputState(playerIndex, inputHistorySize);
             }
-            
-            Debug.Log($"[InputProcessor] Input state ready for player {playerIndex}");
-        }   
-
-        private string GetButtonNames(ushort buttonMask)
-        {
-            var names = new List<string>();
-            for (int i = 0; i < 12; i++)
-            {
-                if ((buttonMask & (1 << i)) != 0)
-                {
-                    names.Add(((InputButton)i).ToString());
-                }
-            }
-            return string.Join(", ", names);
+            Debug.Log($"[InputProcessor] Registered player {playerIndex}");
         }
     }
 
     /// <summary>
-    /// Interpreted input frame with edge detection and other processed data
-    /// </summary>
-    public struct PlayerInputFrame
-    {
-        public byte PlayerIndex;
-        public uint FrameNumber;
-
-        // Raw input data
-        public byte MotionAxis;
-        public short ViewAxisX;
-        public short ViewAxisY;
-        public byte Pad;
-        public ushort Buttons;
-
-        // Edge detection
-        public ushort ButtonsPressed;
-        public ushort ButtonsReleased;
-
-        // Axis changes
-        public bool MotionChanged;
-        public bool PadChanged;
-        public bool ViewChanged;
-
-        // Convenience methods
-        public Vector2 GetMotionVector() => InputPacket.NumpadToVector2(MotionAxis);
-        public Vector2 GetPadVector() => InputPacket.NumpadToVector2(Pad);
-        public Vector2 GetViewVector() => new Vector2(ViewAxisX / 32767f, ViewAxisY / 32767f);
-
-        public bool GetButton(InputButton button) => (Buttons & (1 << (int)button)) != 0;
-        public bool GetButtonDown(InputButton button) => (ButtonsPressed & (1 << (int)button)) != 0;
-        public bool GetButtonUp(InputButton button) => (ButtonsReleased & (1 << (int)button)) != 0;
-
-        public bool HasAnyButtonPress() => ButtonsPressed != 0;
-        public bool HasAnyButtonRelease() => ButtonsReleased != 0;
-        public bool HasAnyInput() => MotionAxis != 5 || Pad != 5 || Buttons != 0 || ViewAxisX != 0 || ViewAxisY != 0;
-    }
-
-    /// <summary>
-    /// Per-player input state tracking
+    /// Enhanced player input state with Unity frame tracking
     /// </summary>
     public class PlayerInputState
     {
         private byte playerIndex;
-        private Queue<InputPacket> history;
         private int maxHistorySize;
-        private InputPacket previousPacket;
+
+        // Current input state (latest from packets)
+        private InputPacket currentPacket;
         private bool hasReceivedInput = false;
 
-        public PlayerInputFrame CurrentFrame { get; private set; }
+        // Unity frame state tracking
+        private int lastUnityFrame = -1;
+        private ushort lastFrameButtons = 0;
+        private ushort buttonsPressed = 0;
+        private ushort buttonsReleased = 0;
+
+        // Input history
+        private Queue<InputPacket> packetHistory;
 
         public PlayerInputState(byte playerIndex, int historySize)
         {
             this.playerIndex = playerIndex;
             this.maxHistorySize = historySize;
-            this.history = new Queue<InputPacket>(historySize);
+            this.packetHistory = new Queue<InputPacket>(historySize);
         }
 
-        public PlayerInputFrame ProcessPacket(InputPacket packet)
+        /// <summary>
+        /// Update state from new input packet
+        /// </summary>
+        public void UpdateFromPacket(InputPacket packet)
         {
-            // Create interpreted frame
-            var frame = new PlayerInputFrame
-            {
-                PlayerIndex = packet.playerIndex,
-                FrameNumber = packet.frameNumber,
-                MotionAxis = packet.motionAxis,
-                ViewAxisX = packet.viewAxisX,
-                ViewAxisY = packet.viewAxisY,
-                Pad = packet.pad,
-                Buttons = packet.buttons
-            };
+            currentPacket = packet;
+            hasReceivedInput = true;
 
-            // Calculate edge detection
-            if (hasReceivedInput)
+            // Add to history
+            packetHistory.Enqueue(packet);
+            while (packetHistory.Count > maxHistorySize)
             {
-                // Button edges
-                frame.ButtonsPressed = (ushort)(~previousPacket.buttons & packet.buttons);
-                frame.ButtonsReleased = (ushort)(previousPacket.buttons & ~packet.buttons);
+                packetHistory.Dequeue();
+            }
+        }
 
-                // Axis changes
-                frame.MotionChanged = packet.motionAxis != previousPacket.motionAxis;
-                frame.PadChanged = packet.pad != previousPacket.pad;
-                frame.ViewChanged = packet.viewAxisX != previousPacket.viewAxisX || 
-                                   packet.viewAxisY != previousPacket.viewAxisY;
+        /// <summary>
+        /// Process edge detection for current Unity frame
+        /// </summary>
+        public void ProcessUnityFrame()
+        {
+            if (!hasReceivedInput) return;
+
+            int currentFrame = Time.frameCount;
+            
+            // First frame with this state
+            if (lastUnityFrame != currentFrame - 1)
+            {
+                // Gap in frames, treat as fresh state
+                buttonsPressed = 0;
+                buttonsReleased = 0;
             }
             else
             {
-                // First frame - treat held buttons as pressed
-                frame.ButtonsPressed = packet.buttons;
-                frame.MotionChanged = packet.motionAxis != 5;
-                frame.PadChanged = packet.pad != 5;
-                frame.ViewChanged = packet.viewAxisX != 0 || packet.viewAxisY != 0;
+                // Calculate edge detection
+                buttonsPressed = (ushort)(~lastFrameButtons & currentPacket.buttons);
+                buttonsReleased = (ushort)(lastFrameButtons & ~currentPacket.buttons);
             }
 
-            // Update history
-            history.Enqueue(packet);
-            while (history.Count > maxHistorySize)
-            {
-                history.Dequeue();
-            }
-
-            // Update state
-            previousPacket = packet;
-            hasReceivedInput = true;
-            CurrentFrame = frame;
-
-            return frame;
+            lastFrameButtons = currentPacket.buttons;
+            lastUnityFrame = currentFrame;
         }
 
-        public InputPacket[] GetHistory(int frameCount)
+        // Public accessors
+        public bool GetButton(InputButton button)
         {
-            var historyArray = history.ToArray();
-            int startIndex = Mathf.Max(0, historyArray.Length - frameCount);
-            int length = Mathf.Min(frameCount, historyArray.Length);
-
-            var result = new InputPacket[length];
-            System.Array.Copy(historyArray, startIndex, result, 0, length);
-            return result;
+            if (!hasReceivedInput) return false;
+            return currentPacket.GetButton(button);
         }
 
-        public bool WasButtonPressedInLastFrames(InputButton button, int frameCount)
+        public bool GetButtonDown(InputButton button)
         {
-            var historyArray = history.ToArray();
-            int startIndex = Mathf.Max(0, historyArray.Length - frameCount);
+            if (!hasReceivedInput) return false;
+            int buttonBit = 1 << (int)button;
+            return (buttonsPressed & buttonBit) != 0;
+        }
 
-            for (int i = startIndex; i < historyArray.Length; i++)
-            {
-                // Check for press edge
-                if (i > 0)
-                {
-                    bool prevPressed = historyArray[i - 1].GetButton(button);
-                    bool currPressed = historyArray[i].GetButton(button);
-                    if (!prevPressed && currPressed)
-                        return true;
-                }
-                else if (historyArray[i].GetButton(button))
-                {
-                    // First frame in our check, count as pressed if held
-                    return true;
-                }
-            }
+        public bool GetButtonUp(InputButton button)
+        {
+            if (!hasReceivedInput) return false;
+            int buttonBit = 1 << (int)button;
+            return (buttonsReleased & buttonBit) != 0;
+        }
 
-            return false;
+        public Vector2 GetMotion()
+        {
+            if (!hasReceivedInput) return Vector2.zero;
+            return currentPacket.GetMotionVector();
+        }
+
+        public Vector2 GetView()
+        {
+            if (!hasReceivedInput) return Vector2.zero;
+            return currentPacket.GetViewVector();
+        }
+
+        public Vector2 GetPad()
+        {
+            if (!hasReceivedInput) return Vector2.zero;
+            return currentPacket.GetPadVector();
+        }
+
+        public InputPacket GetLatestPacket()
+        {
+            return currentPacket;
         }
     }
 }

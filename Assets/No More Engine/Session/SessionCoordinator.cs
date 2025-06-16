@@ -3,12 +3,11 @@ using System;
 using System.Collections.Generic;
 using NoMoreEngine.Input;
 
-
 namespace NoMoreEngine.Session
 {
     /// <summary>
     /// SessionCoordinator - Manages application flow through different states
-    /// Simplified version based on proof-of-concept learnings
+    /// Updated to work with the new NoMoreInput system
     /// </summary>
     public class SessionCoordinator : MonoBehaviour
     {
@@ -26,13 +25,11 @@ namespace NoMoreEngine.Session
 
         // Core components
         private GameConfiguration gameConfig;
-        private InputSerializer inputSerializer;
-        private InputProcessor inputProcessor;
 
         // Events
         public event Action<SessionStateType, SessionStateType> OnStateChanged;
 
-        // Singleton for easy access (can refactor to service locator pattern later)
+        // Singleton for easy access
         private static SessionCoordinator instance;
         public static SessionCoordinator Instance => instance;
 
@@ -83,23 +80,6 @@ namespace NoMoreEngine.Session
         {
             // Create game configuration
             gameConfig = new GameConfiguration();
-
-            // Find input components
-            inputSerializer = FindAnyObjectByType<InputSerializer>();
-            if (inputSerializer == null)
-            {
-                Debug.LogError("[SessionCoordinator] InputSerializer not found!");
-            }
-
-            inputProcessor = FindAnyObjectByType<InputProcessor>();
-            if (inputProcessor == null)
-            {
-                // Create InputProcessor if it doesn't exist
-                Debug.LogWarning("[SessionCoordinator] InputProcessor not found, creating one...");
-                var inputProcessorObject = new GameObject("InputProcessor");
-                inputProcessorObject.transform.SetParent(transform);
-                inputProcessor = inputProcessorObject.AddComponent<InputProcessor>();
-            }
         }
 
         private void InitializeStates()
@@ -110,15 +90,15 @@ namespace NoMoreEngine.Session
             var context = new SessionContext
             {
                 coordinator = this,
-                gameConfig = gameConfig,
-                inputSerializer = inputSerializer,
-                inputProcessor = inputProcessor
+                gameConfig = gameConfig
             };
 
             // Create all session states
             states[SessionStateType.MainMenu] = new MainMenuState();
             states[SessionStateType.MissionLobby] = new MissionLobbyState();
+            states[SessionStateType.VersusLobby] = new VersusLobbyState();
             states[SessionStateType.InGame] = new InGameState();
+            states[SessionStateType.Pause] = new PauseState();
             states[SessionStateType.Results] = new ResultsState();
 
             // Initialize all states
@@ -151,6 +131,13 @@ namespace NoMoreEngine.Session
                 currentState.OnExit();
             }
 
+            // Special handling for pause state
+            if (newStateType == SessionStateType.Pause && currentStateType == SessionStateType.InGame)
+            {
+                var pauseState = newState as PauseState;
+                pauseState?.SetPreviousState(currentStateType);
+            }
+
             // Switch state
             currentState = newState;
             currentStateType = newStateType;
@@ -171,6 +158,7 @@ namespace NoMoreEngine.Session
 
         private void UpdateInputContext(SessionStateType stateType)
         {
+            var inputSerializer = FindAnyObjectByType<InputSerializer>();
             if (inputSerializer == null) return;
 
             // Determine context based on state
@@ -180,6 +168,7 @@ namespace NoMoreEngine.Session
                 SessionStateType.MissionLobby => InputContext.Menu,
                 SessionStateType.VersusLobby => InputContext.Menu,
                 SessionStateType.InGame => InputContext.InGame,
+                SessionStateType.Pause => InputContext.Menu,
                 SessionStateType.Results => InputContext.Menu,
                 _ => InputContext.Menu
             };
@@ -201,6 +190,19 @@ namespace NoMoreEngine.Session
         /// Get the current state object (use carefully - prefer state-specific methods)
         /// </summary>
         public ISessionState GetCurrentState() => currentState;
+
+        /// <summary>
+        /// Get a specific state (for UI access to state data)
+        /// </summary>
+        public T GetState<T>() where T : class, ISessionState
+        {
+            foreach (var state in states.Values)
+            {
+                if (state is T typedState)
+                    return typedState;
+            }
+            return null;
+        }
     }
 
     /// <summary>
@@ -223,8 +225,6 @@ namespace NoMoreEngine.Session
     {
         public SessionCoordinator coordinator;
         public GameConfiguration gameConfig;
-        public InputSerializer inputSerializer;
-        public InputProcessor inputProcessor;
     }
 
     /// <summary>

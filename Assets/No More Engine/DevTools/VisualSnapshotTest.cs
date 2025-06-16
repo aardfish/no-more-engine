@@ -35,7 +35,6 @@ namespace NoMoreEngine.DevTools
         private SnapshotSystem snapshotSystem;
         private SimulationTimeSystem timeSystem;
         private EntityManager entityManager;
-        private InputProcessor inputProcessor;
         
         // Test state
         private bool testStarted = false;
@@ -61,38 +60,21 @@ namespace NoMoreEngine.DevTools
                     StartAutomatedTest();
                 }
             }
-            
-            // Setup input
-            inputProcessor = InputProcessor.Instance;
-            if (inputProcessor != null)
-            {
-                inputProcessor.OnInputFramesReady += HandleInput;
-            }
         }
         
-        void OnDestroy()
+        void HandleInput()
         {
-            if (inputProcessor != null)
-            {
-                inputProcessor.OnInputFramesReady -= HandleInput;
-            }
-        }
-        
-        void HandleInput(PlayerInputFrame[] frames)
-        {
-            if (frames.Length == 0 || snapshotSystem == null || runAutomatedTest) return;
-            
-            var input = frames[0];
+            if (snapshotSystem == null || runAutomatedTest) return;
             
             // Manual capture
-            if (input.GetButtonDown(manualCaptureButton))
+            if (NoMoreInput.Player1.GetButtonDown(manualCaptureButton))
             {
                 CaptureSnapshotWithPositions();
                 snapshotCaptured = true;
             }
             
             // Manual restore
-            if (input.GetButtonDown(manualRestoreButton) && snapshotCaptured)
+            if (NoMoreInput.Player1.GetButtonDown(manualRestoreButton) && snapshotCaptured)
             {
                 RestoreAndCompare();
             }
@@ -100,17 +82,19 @@ namespace NoMoreEngine.DevTools
         
         void Update()
         {
+            HandleInput();
+            
             if (runAutomatedTest && testStarted && snapshotSystem != null)
             {
                 testTimer += Time.deltaTime;
-                
+
                 // Capture snapshot after delay
                 if (!snapshotCaptured && testTimer >= captureAfterSeconds)
                 {
                     CaptureSnapshotWithPositions();
                     snapshotCaptured = true;
                 }
-                
+
                 // Restore snapshot after delay
                 if (!snapshotRestored && testTimer >= restoreAfterSeconds)
                 {
