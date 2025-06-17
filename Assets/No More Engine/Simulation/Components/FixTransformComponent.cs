@@ -9,7 +9,7 @@ namespace NoMoreEngine.Simulation.Components
     /// Core Transform component using fixed-point math for deterministic simulation
     /// </summary>
     [Snapshotable(Priority = 0)] // Default priority, can be overridden by other components
-    public struct FixTransformComponent : IComponentData, ISnapshotable<FixTransformComponent>
+    public struct FixTransformComponent : IComponentData, ISnapshotableComponent<FixTransformComponent>
     {
         public fp3 position;
         public fpquaternion rotation;

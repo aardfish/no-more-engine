@@ -10,7 +10,7 @@ namespace NoMoreEngine.Simulation.Components
     /// Core collision bounds using AABB (Axis-Aligned Bounding Box)
     /// </summary>
     [Snapshotable(Priority = 3)]
-    public struct CollisionBoundsComponent : IComponentData, ISnapshotable<CollisionBoundsComponent>
+    public struct CollisionBoundsComponent : IComponentData, ISnapshotableComponent<CollisionBoundsComponent>
     {
         public fp3 size;           // AABB dimensions (full size, not half-extents)
         public fp3 offset;         // Offset from transform center
@@ -59,7 +59,7 @@ namespace NoMoreEngine.Simulation.Components
     /// Defines how an entity responds to collisions
     /// </summary>
     [Snapshotable(Priority = 4)]
-    public struct CollisionResponseComponent : IComponentData, ISnapshotable<CollisionResponseComponent>
+    public struct CollisionResponseComponent : IComponentData, ISnapshotableComponent<CollisionResponseComponent>
     {
         public CollisionResponse responseType;
         public fp bounciness;          // 0-1, how much velocity is retained on bounce
@@ -99,7 +99,7 @@ namespace NoMoreEngine.Simulation.Components
     /// Static entities don't move and can be cached/optimized
     /// </summary>
     [Snapshotable(Priority = 11)]
-    public struct StaticColliderComponent : IComponentData, ISnapshotable<StaticColliderComponent>
+    public struct StaticColliderComponent : IComponentData, ISnapshotableComponent<StaticColliderComponent>
     {
         public bool isStatic;
 
@@ -142,7 +142,7 @@ namespace NoMoreEngine.Simulation.Components
     /// Buffer component to store collision events for an entity
     /// Events are cleared each frame after processing
     /// </summary>
-    [BufferSnapshotable(Priority = 20, MaxElements = 16)]
+    [Snapshotable(Priority = 20, MaxElements = 16)]
     [InternalBufferCapacity(8)]
     public struct CollisionEventBuffer : IBufferElementData
     {
@@ -163,7 +163,7 @@ namespace NoMoreEngine.Simulation.Components
     /// Buffer to store collision contacts from previous frame
     /// Must be snapshotted to maintain collision continuity
     /// </summary>
-    [BufferSnapshotable(Priority = 21, MaxElements = 32, RequiresEntityRemapping = true)]
+    [Snapshotable(Priority = 21, MaxElements = 32, RequiresEntityRemapping = true)]
     [InternalBufferCapacity(4)]
     public struct CollisionContactBuffer : IBufferElementData
     {
@@ -226,7 +226,7 @@ namespace NoMoreEngine.Simulation.Components
     /// This ensures entities maintain proper physics state after restore
     /// </summary>
     [Snapshotable(Priority = 2, IncludeInHash = true)] // High priority, include in determinism hash
-    public struct CollisionStateComponent : IComponentData, ISnapshotable<CollisionStateComponent>
+    public struct CollisionStateComponent : IComponentData, ISnapshotableComponent<CollisionStateComponent>
     {
         // Ground contact state
         public bool isGrounded;
@@ -268,7 +268,7 @@ namespace NoMoreEngine.Simulation.Components
     /// </summary>
 
     [Snapshotable(Priority = -5, IncludeInHash = true)]
-    public struct CollisionLayerMatrix : IComponentData, ISnapshotable<CollisionLayerMatrix>
+    public struct CollisionLayerMatrix : IComponentData, ISnapshotableComponent<CollisionLayerMatrix>
     {
         // We'll use a simple approach: each layer has a mask of what it can collide with
         // This is more cache-friendly than a full NxN matrix for small layer counts

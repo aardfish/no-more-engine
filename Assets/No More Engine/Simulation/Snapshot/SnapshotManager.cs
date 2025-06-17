@@ -1,8 +1,6 @@
 using Unity.Entities;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
-using Unity.Burst;
-using Unity.Jobs;
 using UnityEngine;
 using System;
 using System.Collections.Generic;
@@ -10,6 +8,7 @@ using System.Reflection;
 using System.Linq;
 using System.Security.Cryptography;
 using NoMoreEngine.Simulation.Components;
+using NoMoreEngine.Simulation.Bridge;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
@@ -21,15 +20,15 @@ namespace NoMoreEngine.Simulation.Snapshot
     {
         private World world;
         private EntityManager entityManager;
-        
-        // Discovered snapshot types
-        private List<SnapshotComponentType> snapshotTypes;
-        private Dictionary<ComponentType, int> typeToIndex;
-        private Dictionary<Type, IComponentSnapshotHandler> snapshotHandlers;
+        private SimulationEntityManager simEntityManager;
+
+        // Single unified type list
+        private List<SnapshotTypeInfo> snapshotTypes;
+        private Dictionary<Type, int> typeToIndex;
+        private Dictionary<Type, ISnapshotHandler> handlers;
         private EntityQuery snapshotQuery;
-        private List<SnapshotBufferType> snapshotBufferTypes;
-        private Dictionary<Type, int> bufferTypeToIndex;
-        private Dictionary<Type, IBufferSnapshotHandler> bufferHandlers;
+
+        // Entity remapping for buffers
         private NativeHashMap<Entity, Entity> entityRemapTable;
         
         // Snapshot storage
@@ -44,6 +43,7 @@ namespace NoMoreEngine.Simulation.Snapshot
         private const int DEFAULT_MAX_SNAPSHOTS = 10;
         private const int DEFAULT_SNAPSHOT_SIZE = 1024 * 1024; // 1MB default
         private const int DEFAULT_MAX_ENTITIES = 10000;
+        private const int MAX_SNAPSHOT_TYPES = 64; // Limited by ulong mask
         
         public SnapshotManager(World world, int maxSnapshots = DEFAULT_MAX_SNAPSHOTS)
         {
@@ -51,189 +51,130 @@ namespace NoMoreEngine.Simulation.Snapshot
             this.entityManager = world.EntityManager;
             this.maxSnapshots = maxSnapshots;
             this.snapshots = new Dictionary<uint, SimulationSnapshot>(maxSnapshots);
-            this.snapshotHandlers = new Dictionary<Type, IComponentSnapshotHandler>();
-            this.snapshotBufferTypes = new List<SnapshotBufferType>();
-            this.bufferTypeToIndex = new Dictionary<Type, int>();
-            this.bufferHandlers = new Dictionary<Type, IBufferSnapshotHandler>();
-            
-            // Discover all snapshotable component types
+            this.typeToIndex = new Dictionary<Type, int>();
+            this.handlers = new Dictionary<Type, ISnapshotHandler>();
+
+            // Get SimulationEntityManager
+            simEntityManager = SimulationEntityManager.Instance;
+            if (simEntityManager == null)
+            {
+                Debug.LogError("[SnapshotManager] SimulationEntityManager not found!");
+            }
+
+            // Discover all snapshotable types
             DiscoverSnapshotableTypes();
 
-            // Discover snapshotable buffer types
-            DiscoverSnapshotableBufferTypes();
-            
-            // Create entity query for all snapshotable entities
+            // Create entity query
             CreateSnapshotQuery();
-            
-            Debug.Log($"[SnapshotManager] Initialized with {snapshotTypes.Count} snapshotable component types");
+
+            Debug.Log($"[SnapshotManager] Initialized with {snapshotTypes.Count} components and buffers");
         }
-        
+
         /// <summary>
         /// Automatically discover all components that implement ISnapshotable
         /// </summary>
         private void DiscoverSnapshotableTypes()
         {
-            snapshotTypes = new List<SnapshotComponentType>();
-            typeToIndex = new Dictionary<ComponentType, int>();
-            
-            // Get all loaded assemblies
+            snapshotTypes = new List<SnapshotTypeInfo>();
+
             var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            
-            // Find all types that have SnapshotableAttribute
-            var snapshotableTypes = new List<Type>();
+            var discoveredTypes = new List<(Type type, SnapshotableAttribute attr, bool isBuffer)>();
+
             foreach (var assembly in assemblies)
             {
                 try
                 {
+                    // Find all types with SnapshotableAttribute
                     var types = assembly.GetTypes()
-                        .Where(t => t.IsValueType && 
-                               !t.IsGenericType &&
-                               typeof(IComponentData).IsAssignableFrom(t) &&
-                               t.GetCustomAttribute<SnapshotableAttribute>() != null)
-                        .ToList();
-                    
-                    snapshotableTypes.AddRange(types);
+                    .Where
+                    (
+                        t => t.IsValueType &&
+                        !t.IsGenericType &&
+                        t.GetCustomAttribute<SnapshotableAttribute>() != null &&
+                        (typeof(IComponentData).IsAssignableFrom(t) || typeof(IBufferElementData).IsAssignableFrom(t))
+                    ).ToList();
+
+                    foreach (var type in types)
+                    {
+                        var attr = type.GetCustomAttribute<SnapshotableAttribute>();
+                        bool isBuffer = typeof(IBufferElementData).IsAssignableFrom(type);
+                        discoveredTypes.Add((type, attr, isBuffer));
+                    }
                 }
                 catch (ReflectionTypeLoadException)
                 {
-                    // Some assemblies might not be fully loaded, skip them
+                    // Skip problematic assemblies
                 }
             }
-            
-            // Sort by priority and create snapshot type info
-            var sortedTypes = snapshotableTypes
-                .Select(t => new { Type = t, Attr = t.GetCustomAttribute<SnapshotableAttribute>() })
-                .OrderBy(x => x.Attr.Priority)
-                .ToList();
-            
+
+            // Sort by priority and separate into components and buffers
+            var sortedTypes = discoveredTypes.OrderBy(x => x.attr.Priority).ToList();
+
+            if (sortedTypes.Count > MAX_SNAPSHOT_TYPES)
+            {
+                Debug.LogError($"[SnapshotManager] Too many snapshot types! Found {sortedTypes.Count}, max is {MAX_SNAPSHOT_TYPES}");
+                sortedTypes = sortedTypes.Take(MAX_SNAPSHOT_TYPES).ToList();
+            }
+
+            // Create unified type list
             for (int i = 0; i < sortedTypes.Count; i++)
             {
-                var type = sortedTypes[i].Type;
-                var attr = sortedTypes[i].Attr;
-                
-                // Get component size safely
-                int componentSize = 0;
-                try
+                var (type, attr, isBuffer) = sortedTypes[i];
+
+                var typeInfo = isBuffer
+                    ? SnapshotTypeInfo.CreateBuffer(type, i, attr)
+                    : SnapshotTypeInfo.CreateComponent(type, i, attr);
+
+                snapshotTypes.Add(typeInfo);
+                typeToIndex[type] = i;
+                CreateHandler(type, typeInfo);
+
+                Debug.Log($"[SnapshotManager] [{i}] Registered {(isBuffer ? "buffer" : "component")}: {type.Name} " + $"(size: {typeInfo.size}, priority: {attr.Priority})");
+            }
+        }
+
+        /// <summary>
+        /// Create appropriate handler for a type
+        /// </summary>
+        private void CreateHandler(Type type, SnapshotTypeInfo typeInfo)
+        {
+            try
+            {
+                ISnapshotHandler handler;
+
+                if (typeInfo.isBuffer)
                 {
-                    componentSize = UnsafeUtility.SizeOf(type);
-                }
-                catch
-                {
-                    // Zero-sized component (tag), size remains 0
-                }
-                
-                var snapshotType = new SnapshotComponentType(type, i, attr);
-                snapshotType.size = componentSize; // Override with actual size
-                snapshotTypes.Add(snapshotType);
-                typeToIndex[snapshotType.componentType] = i;
-                
-                // Create handler for this component type
-                try
-                {
-                    var handlerType = typeof(ComponentSnapshotHandler<>).MakeGenericType(type);
-                    var handler = Activator.CreateInstance(handlerType) as IComponentSnapshotHandler;
-                    if (handler != null)
+                    // Special handlers for specific buffer types
+                    if (type == typeof(CollisionContactBuffer))
                     {
-                        snapshotHandlers[type] = handler;
+                        handler = new CollisionContactBufferHandler(typeInfo);
                     }
                     else
                     {
-                        Debug.LogWarning($"[SnapshotManager] Failed to create handler for type: {type.Name}");
+                        var handlerType = typeof(GenericBufferHandler<>).MakeGenericType(type);
+                        handler = Activator.CreateInstance(handlerType, typeInfo) as ISnapshotHandler;
                     }
-                }
-                catch (Exception e)
-                {
-                    Debug.LogWarning($"[SnapshotManager] Error creating handler for type {type.Name}: {e.Message}");
-                    // Create a null handler that does nothing
-                    snapshotHandlers[type] = new NullComponentSnapshotHandler();
-                }
-                
-                Debug.Log($"[SnapshotManager] Registered snapshotable type: {type.Name} " +
-                         $"(size: {snapshotType.size}, priority: {attr.Priority})");
-            }
-        }
-        
-        /// <summary>
-        /// Check if entity has a specific buffer type (using reflection for now)
-        /// </summary>
-        private bool HasBuffer(Entity entity, Type bufferElementType)
-        {
-            // This is not ideal but works for now
-            var hasBufferMethod = typeof(EntityManager).GetMethod("HasBuffer");
-            var genericMethod = hasBufferMethod.MakeGenericMethod(bufferElementType);
-            return (bool)genericMethod.Invoke(entityManager, new object[] { entity });
-        }
-        
-        /// <summary>
-        /// Discover all buffer components marked with BufferSnapshotableAttribute
-        /// </summary>
-        private void DiscoverSnapshotableBufferTypes()
-        {
-            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            var bufferTypes = new List<Type>();
-
-            foreach (var assembly in assemblies)
-            {
-                try
-                {
-                    var types = assembly.GetTypes()
-                        .Where(t => t.IsValueType &&
-                                    !t.IsGenericType &&
-                                    typeof(IBufferElementData).IsAssignableFrom(t) &&
-                                    t.GetCustomAttribute<BufferSnapshotableAttribute>() != null)
-                        .ToList();
-
-                    bufferTypes.AddRange(types);
-                }
-                catch (ReflectionTypeLoadException)
-                {
-                    // Some assemblies might not be fully loaded, skip them
-                }
-            }
-
-            // Sort by priority and create snapshot buffer type info
-            var sortedTypes = bufferTypes
-                .Select(t => new { Type = t, Attr = t.GetCustomAttribute<BufferSnapshotableAttribute>() })
-                .OrderBy(x => x.Attr.Priority)
-                .ToList();
-
-            for (int i = 0; i < sortedTypes.Count; i++)
-            {
-                var type = sortedTypes[i].Type;
-                var attr = sortedTypes[i].Attr;
-
-                var bufferType = new SnapshotBufferType(type, i, attr);
-                snapshotBufferTypes.Add(bufferType);
-                bufferTypeToIndex[type] = i;
-
-                // Create appropriate handler
-                IBufferSnapshotHandler handler;
-
-                // Use specialized handlers for specific types
-                if (type == typeof(CollisionContactBuffer))
-                {
-                    handler = new CollisionContactBufferHandler();
                 }
                 else
                 {
-                    // Generic handler
-                    var handlerType = typeof(BufferSnapshotHandler<>).MakeGenericType(type);
-                    handler = Activator.CreateInstance(handlerType, attr.MaxElements, attr.RequiresEntityRemapping) as IBufferSnapshotHandler;
+                    var handlerType = typeof(GenericComponentHandler<>).MakeGenericType(type);
+                    handler = Activator.CreateInstance(handlerType, typeInfo) as ISnapshotHandler;
                 }
 
                 if (handler != null)
                 {
-                    bufferHandlers[type] = handler;
-                    Debug.Log($"[SnapshotManager] Registered buffer type: {type.Name} " +
-                         $"(maxElements: {attr.MaxElements}, priority: {attr.Priority}, " +
-                         $"remapping: {attr.RequiresEntityRemapping})");
+                    handlers[type] = handler;
                 }
-
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[SnapshotManager] Failed to create handler for {type.Name}: {e.Message}");
+                handlers[type] = new NullHandler();
             }
         }
 
         /// <summary>
-        /// Create entity query that includes all snapshotable components
+        /// Create entity query for all snapshotable entities
         /// </summary>
         private void CreateSnapshotQuery()
         {
@@ -243,10 +184,11 @@ namespace NoMoreEngine.Simulation.Snapshot
                 return;
             }
 
-            // Build query that includes ANY of the snapshotable components
+            var allTypes = snapshotTypes.Select(t => t.componentType).ToArray();
+
             var queryDesc = new EntityQueryDesc
             {
-                Any = snapshotTypes.Select(t => t.componentType).ToArray(),
+                Any = allTypes,
                 Options = EntityQueryOptions.IncludeDisabledEntities
             };
 
@@ -266,9 +208,6 @@ namespace NoMoreEngine.Simulation.Snapshot
                 Debug.LogWarning($"[SnapshotManager] Snapshot already exists for tick {tick}");
                 return false;
             }
-            
-            // Removed TypeManager.IsInitialized check because it is not accessible.
-            // If you need to ensure initialization, consider another approach or handle exceptions gracefully.
             
             // Remove oldest snapshot if at capacity
             if (snapshots.Count >= maxSnapshots)
@@ -295,8 +234,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                 lastCaptureTime = (Time.realtimeSinceStartupAsDouble - startTime) * 1000.0;
                 
                 Debug.Log($"[SnapshotManager] Captured snapshot for tick {tick} " +
-                         $"({snapshot.entityCount} entities, {snapshot.dataSize} bytes, " +
-                         $"hash: {snapshot.hash:X16}) in {lastCaptureTime:F2}ms");
+                         $"({snapshot.entityCount} entities, {snapshot.dataSize} bytes) in {lastCaptureTime:F2}ms");
                 
                 return true;
             }
@@ -314,14 +252,6 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         private unsafe void CaptureEntities(ref SimulationSnapshot snapshot)
         {
-            // Add debug logging at start
-            var playerQuery = entityManager.CreateEntityQuery(
-                ComponentType.ReadOnly<PlayerControlledTag>(),
-                ComponentType.ReadOnly<PlayerControlComponent>()
-            );
-            Debug.Log($"[SnapshotManager] Found {playerQuery.CalculateEntityCount()} player entities during capture");
-            playerQuery.Dispose();
-
             var entities = snapshotQuery.ToEntityArray(Allocator.Temp);
             var dataPtr = (byte*)snapshot.data.GetUnsafePtr();
             int currentOffset = 0;
@@ -336,64 +266,42 @@ namespace NoMoreEngine.Simulation.Snapshot
                 }
                 
                 int entityDataStart = currentOffset;
-                uint componentMask = 0;
-                
-                // Capture each component type
+                ulong typeMask = 0;
+
+                // Single loop for all types
                 for (int i = 0; i < snapshotTypes.Count; i++)
                 {
-                    var snapshotType = snapshotTypes[i];
-                    
-                    if (entityManager.HasComponent(entity, snapshotType.componentType))
+                    var typeInfo = snapshotTypes[i];
+                    bool hasType = false;
+
+                    if (typeInfo.isBuffer)
                     {
-                        // Mark component as present in mask
-                        componentMask |= (1u << i);
-                        
-                        // Skip data copying for zero-sized components
-                        if (snapshotType.size == 0)
-                            continue;
-                        
-                        // Get handler for this component type
-                        if (!snapshotHandlers.TryGetValue(snapshotType.managedType, out var handler))
-                        {
-                            Debug.LogWarning($"[SnapshotManager] No handler found for type {snapshotType.managedType.Name}");
-                            continue;
-                        }
-                        
-                        // Only copy data and advance offset for non-zero sized components
-                        handler.CopyToSnapshot(entityManager, entity, (IntPtr)(dataPtr + currentOffset));
-                        currentOffset += snapshotType.size;
+                        hasType = HasBuffer(entity, typeInfo.managedType);
                     }
-                }
-
-                int bufferDataStart = currentOffset;
-                uint bufferMask = 0;
-
-                for (int i = 0; i < snapshotBufferTypes.Count; i++)
-                {
-                    var bufferType = snapshotBufferTypes[i];
-
-                    // Check if entity has this buffer type
-                    if (HasBuffer(entity, bufferType.bufferElementType))
+                    else
                     {
-                        bufferMask |= (1u << i);
+                        hasType = entityManager.HasComponent(entity, typeInfo.componentType);
+                    }
 
-                        if (bufferHandlers.TryGetValue(bufferType.bufferElementType, out var handler))
+                    if (hasType)
+                    {
+                        typeMask |= (1UL << i);
+
+                        if (handlers.TryGetValue(typeInfo.managedType, out var handler))
                         {
-                            handler.CopyBufferToSnapshot(entityManager, entity, (IntPtr)(dataPtr + currentOffset), out int bytesWritten);
+                            // Copy component or buffer data to snapshot
+                            handler.CopyToSnapshot(entityManager, entity, (IntPtr)(dataPtr + currentOffset), out int bytesWritten);
                             currentOffset += bytesWritten;
                         }
                     }
                 }
                 
                 // Store entity snapshot info
-                snapshot.entities[entityIndex] = new EntitySnapshot(
+                snapshot.entities[entityIndex] = EntitySnapshot.Create(
                     entity, 
-                    entityDataStart, 
-                    currentOffset - entityDataStart, 
-                    componentMask,
-                    bufferDataStart,
-                    currentOffset - bufferDataStart,
-                    bufferMask
+                    entityDataStart,
+                    currentOffset - entityDataStart,
+                    typeMask
                 );
                 
                 entityIndex++;
@@ -406,7 +314,7 @@ namespace NoMoreEngine.Simulation.Snapshot
         }
         
         /// <summary>
-        /// Restore simulation state from a snapshot
+        /// Restore snapshot using SimulationEntityManager
         /// </summary>
         public bool RestoreSnapshot(uint tick)
         {
@@ -420,16 +328,23 @@ namespace NoMoreEngine.Simulation.Snapshot
             
             try
             {
-                // First, destroy all existing entities
-                entityManager.DestroyEntity(snapshotQuery);
+                // Use SimulationEntityManager to destroy all managed entities
+                if (simEntityManager != null)
+                {
+                    simEntityManager.DestroyAllManagedEntities();
+                }
+                else
+                {
+                    // Fallback
+                    entityManager.DestroyEntity(snapshotQuery);
+                }
                 
                 // Restore entities from snapshot
                 RestoreEntities(ref snapshot);
                 
                 lastRestoreTime = (Time.realtimeSinceStartupAsDouble - startTime) * 1000.0;
                 
-                Debug.Log($"[SnapshotManager] Restored snapshot for tick {tick} " +
-                         $"({snapshot.entityCount} entities) in {lastRestoreTime:F2}ms");
+                Debug.Log($"[SnapshotManager] Restored snapshot for tick {tick} in {lastRestoreTime:F2}ms");
                 
                 return true;
             }
@@ -445,20 +360,12 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         private unsafe void RestoreEntities(ref SimulationSnapshot snapshot)
         {
-            // Debug logging for initial state
-            var beforePlayerQuery = entityManager.CreateEntityQuery(
-                ComponentType.ReadOnly<PlayerControlledTag>(),
-                ComponentType.ReadOnly<PlayerControlComponent>()
-            );
-            Debug.Log($"[SnapshotManager] Player entities before restore: {beforePlayerQuery.CalculateEntityCount()}");
-            beforePlayerQuery.Dispose();
-
             var dataPtr = (byte*)snapshot.data.GetUnsafeReadOnlyPtr();
             
             // Create entity remap table
             entityRemapTable = new NativeHashMap<Entity, Entity>(snapshot.entityCount * 2, Allocator.Temp);
             
-            // First pass: Create all entities and build remap table
+            // First pass: Create all entities 
             var newEntities = new NativeArray<Entity>(snapshot.entityCount, Allocator.Temp);
             entityManager.CreateEntity(entityManager.CreateArchetype(), newEntities);
             
@@ -470,83 +377,69 @@ namespace NoMoreEngine.Simulation.Snapshot
                 var newEntity = newEntities[i];
                 entityRemapTable.Add(oldEntity, newEntity);
             }
-            
-            // Second pass: Restore components and buffers
+
+            // Second pass: Restore all data
             for (int i = 0; i < snapshot.entityCount; i++)
             {
                 var entitySnapshot = snapshot.entities[i];
                 var entity = newEntities[i];
                 int dataOffset = entitySnapshot.dataOffset;
-                int bufferOffset = entitySnapshot.bufferDataOffset;
-                
-                // Restore components
+
+                // Single loop for all types
                 for (int typeIndex = 0; typeIndex < snapshotTypes.Count; typeIndex++)
                 {
-                    if ((entitySnapshot.componentMask & (1u << typeIndex)) != 0)
+                    if ((entitySnapshot.typeMask & (1UL << typeIndex)) != 0)
                     {
-                        var snapshotType = snapshotTypes[typeIndex];
+                        var typeInfo = snapshotTypes[typeIndex];
 
-                        // Add component regardless of size
-                        if (!entityManager.HasComponent(entity, snapshotType.componentType))
+                        // Add component/buffer if needed
+                        if (typeInfo.isBuffer)
                         {
-                            entityManager.AddComponent(entity, snapshotType.componentType);
-                        }
-
-                        // Skip data restoration for zero-sized components
-                        if (snapshotType.size == 0)
-                            continue;
-
-                        // Get handler for this component type
-                        if (!snapshotHandlers.TryGetValue(snapshotType.managedType, out var handler))
-                        {
-                            Debug.LogWarning($"[SnapshotManager] No handler found for type {snapshotType.managedType.Name}");
-                            dataOffset += snapshotType.size;
-                            continue;
-                        }
-
-                        // Copy component data
-                        handler.CopyFromSnapshot(entityManager, entity, (IntPtr)(dataPtr + dataOffset));
-                        dataOffset += snapshotType.size;
-                    }
-                }
-                
-                // Restore buffers
-                for (int typeIndex = 0; typeIndex < snapshotBufferTypes.Count; typeIndex++)
-                {
-                    if ((entitySnapshot.bufferMask & (1u << typeIndex)) != 0)
-                    {
-                        var bufferType = snapshotBufferTypes[typeIndex];
-                        
-                        // Get buffer handler
-                        if (bufferHandlers.TryGetValue(bufferType.bufferElementType, out var handler))
-                        {
-                            // Add buffer component if needed
-                            if (!HasBuffer(entity, bufferType.bufferElementType))
+                            if (!HasBuffer(entity, typeInfo.managedType))
                             {
-                                var addBufferMethod = typeof(EntityManager).GetMethod("AddBuffer");
-                                var genericMethod = addBufferMethod.MakeGenericMethod(bufferType.bufferElementType);
-                                genericMethod.Invoke(entityManager, new object[] { entity });
+                                AddBuffer(entity, typeInfo.managedType);
                             }
+                        }
+                        else
+                        {
+                            if (!entityManager.HasComponent(entity, typeInfo.componentType))
+                            {
+                                entityManager.AddComponent(entity, typeInfo.componentType);
+                            }
+                        }
 
-                            // Restore buffer data
-                            // We need to calculate bytes read based on the buffer type's max size
-                            handler.CopyBufferFromSnapshot(entityManager, entity, (IntPtr)(dataPtr + bufferOffset), bufferType.maxSize);
-                            bufferOffset += bufferType.maxSize; // Move by max size (actual data read is handled internally)
+                        // Restore data
+                        if (handlers.TryGetValue(typeInfo.managedType, out var handler))
+                        {
+                            handler.CopyFromSnapshot(entityManager, entity, (IntPtr)(dataPtr + dataOffset));
+
+                            // Advance by the actual size stored
+                            if (typeInfo.isBuffer)
+                            {
+                                // For buffers, we need to calculate the actual size
+                                int elementCount = *(int*)(dataPtr + dataOffset);
+                                dataOffset += sizeof(int) + (elementCount * typeInfo.size);
+                            }
+                            else
+                            {
+                                dataOffset += typeInfo.size;
+                            }
                         }
                     }
                 }
             }
-            
+
             // Third pass: Remap entity references in buffers
             for (int i = 0; i < snapshot.entityCount; i++)
             {
                 var entity = newEntities[i];
-                
-                foreach (var bufferType in snapshotBufferTypes)
+
+                for (int typeIndex = 0; typeIndex < snapshotTypes.Count; typeIndex++)
                 {
-                    if (bufferType.requiresRemapping)
+                    var typeInfo = snapshotTypes[typeIndex];
+                    if (typeInfo.requiresRemapping && (snapshot.entities[i].typeMask & (1UL << typeIndex)) != 0)
                     {
-                        if (bufferHandlers.TryGetValue(bufferType.bufferElementType, out var handler))
+                        if (handlers.TryGetValue(typeInfo.managedType, out var handler) && handler.RequiresRemapping)
                         {
                             handler.RemapEntityReferences(entityManager, entity, entityRemapTable);
                         }
@@ -557,14 +450,26 @@ namespace NoMoreEngine.Simulation.Snapshot
             // Cleanup
             entityRemapTable.Dispose();
             newEntities.Dispose();
-
-            // Debug logging for final state
-            var afterPlayerQuery = entityManager.CreateEntityQuery(
-                ComponentType.ReadOnly<PlayerControlledTag>(),
-                ComponentType.ReadOnly<PlayerControlComponent>()
-            );
-            Debug.Log($"[SnapshotManager] Player entities after restore: {afterPlayerQuery.CalculateEntityCount()}");
-            afterPlayerQuery.Dispose();
+        }
+        
+        /// <summary>
+        /// Check if entity has a specific buffer type
+        /// </summary>
+        private bool HasBuffer(Entity entity, Type bufferElementType)
+        {
+            var hasBufferMethod = typeof(EntityManager).GetMethod("HasBuffer");
+            var genericMethod = hasBufferMethod.MakeGenericMethod(bufferElementType);
+            return (bool)genericMethod.Invoke(entityManager, new object[] { entity });
+        }
+        
+        /// <summary>
+        /// Add buffer to entity using reflection
+        /// </summary>
+        private void AddBuffer(Entity entity, Type bufferElementType)
+        {
+            var addBufferMethod = typeof(EntityManager).GetMethod("AddBuffer");
+            var genericMethod = addBufferMethod.MakeGenericMethod(bufferElementType);
+            genericMethod.Invoke(entityManager, new object[] { entity });
         }
         
         /// <summary>
@@ -654,7 +559,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                     hash = snapshot.hash,
                     entityCount = snapshot.entityCount,
                     dataSize = snapshot.dataSize,
-                    componentTypeCount = snapshotTypes.Count
+                    componentTypeCount = snapshotTypes.Count  // Just use the unified count
                 };
             }
             
@@ -682,97 +587,180 @@ namespace NoMoreEngine.Simulation.Snapshot
         public int SnapshotCount => snapshots.Count;
         public double LastCaptureTimeMs => lastCaptureTime;
         public double LastRestoreTimeMs => lastRestoreTime;
-        public IReadOnlyList<SnapshotComponentType> RegisteredTypes => snapshotTypes.AsReadOnly();
+        public IReadOnlyList<SnapshotTypeInfo> RegisteredTypes => snapshotTypes.AsReadOnly();
     }
     
     /// <summary>
-    /// Interface for component-specific snapshot handlers
+    /// Unified snapshot handler interface
     /// </summary>
-    public interface IComponentSnapshotHandler
+    public interface ISnapshotHandler
     {
-        void CopyToSnapshot(EntityManager entityManager, Entity entity, IntPtr destination);
-        void CopyFromSnapshot(EntityManager entityManager, Entity entity, IntPtr source);
+        void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten);
+        void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src);
+        void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap);
+        bool RequiresRemapping { get; }
     }
     
     /// <summary>
-    /// Generic component snapshot handler
+    /// Generic component handler
     /// </summary>
-    public class ComponentSnapshotHandler<T> : IComponentSnapshotHandler where T : unmanaged, IComponentData
+    public class GenericComponentHandler<T> : ISnapshotHandler where T : unmanaged, IComponentData
     {
-        private readonly int componentSize;
+        private readonly SnapshotTypeInfo typeInfo;
         
-        public ComponentSnapshotHandler()
+        public GenericComponentHandler(SnapshotTypeInfo typeInfo)
         {
-            // Safely determine component size
-            try
-            {
-                componentSize = UnsafeUtility.SizeOf<T>();
-            }
-            catch
-            {
-                // Zero-sized component (tag)
-                componentSize = 0;
-            }
+            this.typeInfo = typeInfo;
         }
         
-        public unsafe void CopyToSnapshot(EntityManager entityManager, Entity entity, IntPtr destination)
+        public unsafe void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten)
         {
-            // Skip data copying for zero-sized components (tags)
-            if (componentSize == 0)
-                return;
-                
+            bytesWritten = typeInfo.size;
+            
+            if (typeInfo.size == 0) return; // Tag component
+            
             try
             {
-                var component = entityManager.GetComponentData<T>(entity);
-                UnsafeUtility.CopyStructureToPtr(ref component, (void*)destination);
+                var component = em.GetComponentData<T>(entity);
+                UnsafeUtility.CopyStructureToPtr(ref component, (void*)dest);
             }
             catch (Exception e)
             {
-                if (!typeof(T).Name.EndsWith("Tag"))
-                {
-                    // Only log error for non-tag components
-                    Debug.LogError($"[SnapshotHandler] Failed to copy component {typeof(T).Name}: {e.Message}");
-                }
+                Debug.LogError($"[SnapshotHandler] Failed to copy component {typeof(T).Name}: {e.Message}");
             }
         }
         
-        public unsafe void CopyFromSnapshot(EntityManager entityManager, Entity entity, IntPtr source)
+        public unsafe void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src)
         {
-            // Skip data copying for zero-sized components (tags)
-            if (componentSize == 0)
-                return;
-                
+            if (typeInfo.size == 0) return; // Tag component
+            
             try
             {
                 var component = default(T);
-                UnsafeUtility.CopyPtrToStructure((void*)source, out component);
-                entityManager.SetComponentData(entity, component);
+                UnsafeUtility.CopyPtrToStructure((void*)src, out component);
+                em.SetComponentData(entity, component);
             }
             catch (Exception e)
             {
-                if (!typeof(T).Name.EndsWith("Tag"))
+                Debug.LogError($"[SnapshotHandler] Failed to restore component {typeof(T).Name}: {e.Message}");
+            }
+        }
+        
+        public void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap)
+        {
+            // Components don't have entity references by default
+        }
+        
+        public bool RequiresRemapping => false;
+    }
+    
+    /// <summary>
+    /// Generic buffer handler
+    /// </summary>
+    public class GenericBufferHandler<T> : ISnapshotHandler where T : unmanaged, IBufferElementData
+    {
+        private readonly SnapshotTypeInfo typeInfo;
+        
+        public GenericBufferHandler(SnapshotTypeInfo typeInfo)
+        {
+            this.typeInfo = typeInfo;
+        }
+        
+        public unsafe void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten)
+        {
+            if (!em.HasBuffer<T>(entity))
+            {
+                bytesWritten = sizeof(int);
+                *(int*)dest = 0;
+                return;
+            }
+            
+            var buffer = em.GetBuffer<T>(entity, true);
+            var ptr = (byte*)dest;
+            
+            int elementCount = Math.Min(buffer.Length, typeInfo.maxElements);
+            *(int*)ptr = elementCount;
+            ptr += sizeof(int);
+            
+            for (int i = 0; i < elementCount; i++)
+            {
+                var element = buffer[i];
+                UnsafeUtility.CopyStructureToPtr(ref element, ptr);
+                ptr += typeInfo.size;
+            }
+            
+            bytesWritten = sizeof(int) + (elementCount * typeInfo.size);
+        }
+        
+        public unsafe void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src)
+        {
+            var ptr = (byte*)src;
+            int elementCount = *(int*)ptr;
+            ptr += sizeof(int);
+            
+            if (elementCount == 0) return;
+            
+            var buffer = em.GetBuffer<T>(entity);
+            buffer.Clear();
+            buffer.EnsureCapacity(elementCount);
+            
+            for (int i = 0; i < elementCount; i++)
+            {
+                var element = default(T);
+                UnsafeUtility.CopyPtrToStructure(ptr, out element);
+                buffer.Add(element);
+                ptr += typeInfo.size;
+            }
+        }
+        
+        public virtual void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap)
+        {
+            // Override in specialized handlers
+        }
+        
+        public bool RequiresRemapping => typeInfo.requiresRemapping;
+    }
+    
+    /// <summary>
+    /// Specialized handler for CollisionContactBuffer
+    /// </summary>
+    public class CollisionContactBufferHandler : GenericBufferHandler<CollisionContactBuffer>
+    {
+        public CollisionContactBufferHandler(SnapshotTypeInfo typeInfo) : base(typeInfo) { }
+        
+        public override void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap)
+        {
+            if (!em.HasBuffer<CollisionContactBuffer>(entity)) return;
+            
+            var buffer = em.GetBuffer<CollisionContactBuffer>(entity);
+            
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                var element = buffer[i];
+                if (remap.TryGetValue(element.otherEntity, out Entity remapped))
                 {
-                    // Only log error for non-tag components
-                    Debug.LogError($"[SnapshotHandler] Failed to restore component {typeof(T).Name}: {e.Message}");
+                    element.otherEntity = remapped;
+                    buffer[i] = element;
                 }
             }
         }
     }
     
     /// <summary>
-    /// Null handler for components that fail to create proper handlers
+    /// Null handler for failed handler creation
     /// </summary>
-    public class NullComponentSnapshotHandler : IComponentSnapshotHandler
+    public class NullHandler : ISnapshotHandler
     {
-        public void CopyToSnapshot(EntityManager entityManager, Entity entity, IntPtr destination)
+        public void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten)
         {
-            // Do nothing - this is a fallback for failed handler creation
+            bytesWritten = 0;
         }
         
-        public void CopyFromSnapshot(EntityManager entityManager, Entity entity, IntPtr source)
-        {
-            // Do nothing - this is a fallback for failed handler creation
-        }
+        public void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src) { }
+        
+        public void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap) { }
+        
+        public bool RequiresRemapping => false;
     }
     
     /// <summary>

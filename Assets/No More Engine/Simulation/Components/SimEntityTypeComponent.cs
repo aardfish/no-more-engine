@@ -9,7 +9,7 @@ namespace NoMoreEngine.Simulation.Components
     /// </summary>
 
     [Snapshotable(Priority = 5)]
-    public struct SimEntityTypeComponent : IComponentData, ISnapshotable<SimEntityTypeComponent>
+    public struct SimEntityTypeComponent : IComponentData, ISnapshotableComponent<SimEntityTypeComponent>
     {
         public SimEntityType simEntityType;
 

@@ -9,7 +9,7 @@ namespace NoMoreEngine.Simulation.Components
     /// Now snapshotable to ensure time consistency across save/load
     /// </summary>
     [Snapshotable(Priority = -1)] // Highest priority - time should be first
-    public struct SimulationTimeComponent : IComponentData, ISnapshotable<SimulationTimeComponent>
+    public struct SimulationTimeComponent : IComponentData, ISnapshotableComponent<SimulationTimeComponent>
     {
         // Core timing
         public uint currentTick;           // Deterministic frame counter

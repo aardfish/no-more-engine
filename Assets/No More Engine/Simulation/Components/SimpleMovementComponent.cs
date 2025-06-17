@@ -11,7 +11,7 @@ namespace NoMoreEngine.Simulation.Components
     /// </summary>
 
     [Snapshotable(Priority = 1)]
-    public struct SimpleMovementComponent : IComponentData, ISnapshotable<SimpleMovementComponent>
+    public struct SimpleMovementComponent : IComponentData, ISnapshotableComponent<SimpleMovementComponent>
     {
         public fp3 velocity;
 

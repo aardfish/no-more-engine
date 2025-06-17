@@ -10,7 +10,7 @@ namespace NoMoreEngine.Simulation.Components
     /// </summary>
 
     [Snapshotable(Priority = 10)] // Higher priority for player control
-    public struct PlayerControlledTag : IComponentData, ISnapshotable<PlayerControlledTag>
+    public struct PlayerControlledTag : IComponentData, ISnapshotableComponent<PlayerControlledTag>
     {
         // Just a tag, no data needed
         public int GetSnapshotSize() => 0; // No data to serialize
@@ -22,7 +22,7 @@ namespace NoMoreEngine.Simulation.Components
     /// </summary>
 
     [Snapshotable(Priority = 11)]
-    public struct PlayerControlComponent : IComponentData, ISnapshotable<PlayerControlComponent>
+    public struct PlayerControlComponent : IComponentData, ISnapshotableComponent<PlayerControlComponent>
     {
         public byte playerIndex; // 0-3 for P1-P4
 

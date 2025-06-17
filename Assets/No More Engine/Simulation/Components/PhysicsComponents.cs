@@ -65,7 +65,7 @@ namespace NoMoreEngine.Simulation.Components
     /// </summary>
 
     [Snapshotable(Priority = 2)]
-    public struct PhysicsComponent : IComponentData, ISnapshotable<PhysicsComponent>
+    public struct PhysicsComponent : IComponentData, ISnapshotableComponent<PhysicsComponent>
     {
         public fp mass;                    // Entity mass (affects gravity acceleration)
         public fp gravityScale;            // Individual gravity multiplier
