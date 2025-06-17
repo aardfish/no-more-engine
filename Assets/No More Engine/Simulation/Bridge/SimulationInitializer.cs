@@ -1,7 +1,5 @@
 using UnityEngine;
 using Unity.Entities;
-using Unity.Collections;
-using System.Collections.Generic;
 using NoMoreEngine.Session;
 using NoMoreEngine.Simulation.Components;
 using Unity.Mathematics.FixedPoint;
@@ -17,13 +15,17 @@ namespace NoMoreEngine.Simulation.Bridge
     {
         private EntityManager entityManager;
         private World simulationWorld;
-
-        // Track spawned entities for cleanup
-        private List<Entity> matchEntities = new List<Entity>();
+        private SimulationEntityManager simEntityManager;
 
         void Awake()
         {
-            // Don't get world in Awake - it might not exist yet
+            // Get or create our simulation entity manager
+            simEntityManager = SimulationEntityManager.Instance;
+            if (simEntityManager == null)
+            {
+                var simEntityManagerObject = new GameObject("SimulationEntityManager");
+                simEntityManager = simEntityManagerObject.AddComponent<SimulationEntityManager>();
+            }
         }
 
         /// <summary>
@@ -38,12 +40,16 @@ namespace NoMoreEngine.Simulation.Bridge
                 Debug.LogError("[SimulationInit] No ECS world available!");
                 return false;
             }
-
+            
+            // Get Unity's EntityManager
             entityManager = simulationWorld.EntityManager;
+
+            // Initialize our simulation entity manager with world
+            simEntityManager.Initialize(simulationWorld);
 
             Debug.Log($"[SimulationInit] Initializing match: {config.stageName}, {config.GetActivePlayerCount()} players");
 
-            // Clear any previous match entities
+            // Clean up any previous match entities
             CleanupMatch();
 
             // Ensure required singletons exist
@@ -66,42 +72,45 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public void CleanupMatch()
         {
-            if (matchEntities.Count > 0)
-            {
-                Debug.Log($"[SimulationInit] Cleaning up {matchEntities.Count} match entities");
+            Debug.Log("[SimulationInit] Cleaning up match entities");
 
-                foreach (var entity in matchEntities)
-                {
-                    if (entityManager.Exists(entity))
-                    {
-                        entityManager.DestroyEntity(entity);
-                    }
-                }
-
-                matchEntities.Clear();
-            }
+            // Our Simulation Entity Manager does this now
+            simEntityManager.DestroyAllInCategory(EntityCategory.Player);
+            simEntityManager.DestroyAllInCategory(EntityCategory.Enemy);
+            simEntityManager.DestroyAllInCategory(EntityCategory.Projectile);
+            simEntityManager.DestroyAllInCategory(EntityCategory.Environment);
+            simEntityManager.DestroyAllInCategory(EntityCategory.Pickup);
         }
 
         private void EnsureSimulationSingletons()
         {
-            // Ensure collision layer matrix exists
-            var layerMatrixQuery = entityManager.CreateEntityQuery(typeof(CollisionLayerMatrix));
+            // Use Unity's EntityManager for queries
+            var manager = entityManager;
+
+            // Collision Layer matrix
+            var layerMatrixQuery = manager.CreateEntityQuery(typeof(CollisionLayerMatrix));
             if (layerMatrixQuery.IsEmpty)
             {
-                var entity = entityManager.CreateEntity();
-                entityManager.AddComponentData(entity, CollisionLayerMatrix.CreateDefault());
-                matchEntities.Add(entity);
+                var archetype = simEntityManager.GetOrCreateArchetype(
+                    "CollisionMatrix",
+                    typeof(CollisionLayerMatrix)
+                );
+                var entity = simEntityManager.CreateEntity(archetype, EntityCategory.System, "CollisionLayerMatrix");
+                manager.SetComponentData(entity, CollisionLayerMatrix.CreateDefault());
                 Debug.Log("[SimulationInit] Created collision layer matrix");
             }
             layerMatrixQuery.Dispose();
 
-            // Ensure global gravity exists
-            var gravityQuery = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
+            // Global gravity
+            var gravityQuery = manager.CreateEntityQuery(typeof(GlobalGravityComponent));
             if (gravityQuery.IsEmpty)
             {
-                var entity = entityManager.CreateEntity();
-                entityManager.AddComponentData(entity, GlobalGravityComponent.EarthGravity);
-                matchEntities.Add(entity);
+                var archetype = simEntityManager.GetOrCreateArchetype(
+                    "GlobalGravity",
+                    typeof(GlobalGravityComponent)
+                );
+                var entity = simEntityManager.CreateEntity(archetype, EntityCategory.System, "GlobalGravity");
+                manager.SetComponentData(entity, GlobalGravityComponent.EarthGravity);
                 Debug.Log("[SimulationInit] Created global gravity");
             }
             gravityQuery.Dispose();
@@ -134,45 +143,14 @@ namespace NoMoreEngine.Simulation.Bridge
 
         private void CreateTestArena()
         {
-            // Create floor
-            var floor = entityManager.CreateEntity();
-            matchEntities.Add(floor);
+            // Create floor using our simulation entity manager
+            var floor = CreatePlatform(new fp3(0, (fp)(-0.5f), 0), new fp3(20, 1, 20));
 
-            entityManager.AddComponentData(floor, new FixTransformComponent
-            {
-                position = new fp3(0, (fp)(-0.5f), 0),
-                rotation = fpquaternion.identity,
-                scale = new fp3(20, 1, 20)
-            });
-
-            entityManager.AddComponentData(floor, new SimEntityTypeComponent
-            {
-                simEntityType = SimEntityType.Environment
-            });
-
-            entityManager.AddComponentData(floor, new CollisionBoundsComponent
-            {
-                size = new fp3(20, 1, 20),
-                offset = fp3.zero,
-                tolerance = (fp)0.001f
-            });
-
-            entityManager.AddComponentData(floor, new CollisionResponseComponent
-            {
-                responseType = CollisionResponse.None,
-                entityLayer = CollisionLayer.Environment,
-                collidesWith = CollisionLayer.All,
-                bounciness = (fp)0,
-                friction = (fp)0.5f
-            });
-
-            entityManager.AddComponentData(floor, new StaticColliderComponent { isStatic = true });
-
-            // Create some walls
-            CreateWall(new fp3(10, 2, 0), new fp3(1, 4, 20));   // Right wall
-            CreateWall(new fp3(-10, 2, 0), new fp3(1, 4, 20));  // Left wall
-            CreateWall(new fp3(0, 2, 10), new fp3(20, 4, 1));   // Back wall
-            CreateWall(new fp3(0, 2, -10), new fp3(20, 4, 1));  // Front wall
+            // Create walls
+            CreateWall(new fp3(10, 2, 0), new fp3(1, 4, 20));    // Right wall
+            CreateWall(new fp3(-10, 2, 0), new fp3(1, 4, 20));   // Left wall
+            CreateWall(new fp3(0, 2, 10), new fp3(20, 4, 1));    // Back wall
+            CreateWall(new fp3(0, 2, -10), new fp3(20, 4, 1));   // Front wall
 
             Debug.Log("[SimulationInit] Created test arena");
         }
@@ -213,76 +191,14 @@ namespace NoMoreEngine.Simulation.Bridge
 
         private Entity CreatePlatform(fp3 position, fp3 size)
         {
-            var platform = entityManager.CreateEntity();
-            matchEntities.Add(platform);
-
-            entityManager.AddComponentData(platform, new FixTransformComponent
-            {
-                position = position,
-                rotation = fpquaternion.identity,
-                scale = size
-            });
-
-            entityManager.AddComponentData(platform, new SimEntityTypeComponent
-            {
-                simEntityType = SimEntityType.Environment
-            });
-
-            entityManager.AddComponentData(platform, new CollisionBoundsComponent
-            {
-                size = size,
-                offset = fp3.zero,
-                tolerance = (fp)0.001f
-            });
-
-            entityManager.AddComponentData(platform, new CollisionResponseComponent
-            {
-                responseType = CollisionResponse.None,
-                entityLayer = CollisionLayer.Environment,
-                collidesWith = CollisionLayer.All,
-                bounciness = (fp)0,
-                friction = (fp)0.5f
-            });
-
-            entityManager.AddComponentData(platform, new StaticColliderComponent { isStatic = true });
-
-            return platform;
+            // Simplified - just delegate to simulation entity manager
+            return simEntityManager.CreateEnvironmentEntity(position, size, isStatic: true);
         }
 
-        private void CreateWall(fp3 position, fp3 size)
+        private Entity CreateWall(fp3 position, fp3 size)
         {
-            var wall = entityManager.CreateEntity();
-            matchEntities.Add(wall);
-
-            entityManager.AddComponentData(wall, new FixTransformComponent
-            {
-                position = position,
-                rotation = fpquaternion.identity,
-                scale = size
-            });
-
-            entityManager.AddComponentData(wall, new SimEntityTypeComponent
-            {
-                simEntityType = SimEntityType.Environment
-            });
-
-            entityManager.AddComponentData(wall, new CollisionBoundsComponent
-            {
-                size = size,
-                offset = fp3.zero,
-                tolerance = (fp)0.001f
-            });
-
-            entityManager.AddComponentData(wall, new CollisionResponseComponent
-            {
-                responseType = CollisionResponse.None,
-                entityLayer = CollisionLayer.Environment,
-                collidesWith = CollisionLayer.All,
-                bounciness = (fp)0.2f,
-                friction = (fp)0.3f
-            });
-
-            entityManager.AddComponentData(wall, new StaticColliderComponent { isStatic = true });
+            // Simplified - just delegate to simulation entity manager
+            return simEntityManager.CreateEnvironmentEntity(position, size, isStatic: true);
         }
 
         private void CreatePlayers(GameConfiguration config)
@@ -295,8 +211,18 @@ namespace NoMoreEngine.Simulation.Bridge
                 var slot = config.playerSlots[i];
                 if (slot.IsEmpty) continue;
 
-                var playerEntity = CreatePlayerEntity(slot, spawnPositions[spawnIndex]);
-                matchEntities.Add(playerEntity);
+                var playerEntity = simEntityManager.CreatePlayerEntity(
+                    spawnPositions[spawnIndex],
+                    (byte)slot.slotIndex,
+                    slot.IsLocal
+                );
+
+                // Add any additional components for bots
+                if (slot.IsBot)
+                {
+                    // AI component not yet implemented
+                    // .AddComponent<AIControlledTag>(playerEntity);
+                }
 
                 spawnIndex++;
             }
@@ -376,11 +302,16 @@ namespace NoMoreEngine.Simulation.Bridge
 
         private void CreateMatchRules(GameConfiguration config)
         {
-            // Create a singleton entity to hold match rules
-            var rulesEntity = entityManager.CreateEntity();
-            matchEntities.Add(rulesEntity);
+            // Create match rules as a system entity
+            var archetype = simEntityManager.GetOrCreateArchetype(
+                "MatchRules",
+                typeof(MatchRulesComponent)
+            );
 
-            entityManager.AddComponentData(rulesEntity, new MatchRulesComponent
+            var rulesEntity = simEntityManager.CreateEntity(archetype, EntityCategory.System, "MatchRules");
+
+            // Use Unity's EntityManger to set component data
+            entityManager.SetComponentData(rulesEntity, new MatchRulesComponent
             {
                 gameMode = config.gameMode,
                 winCondition = config.winCondition,
