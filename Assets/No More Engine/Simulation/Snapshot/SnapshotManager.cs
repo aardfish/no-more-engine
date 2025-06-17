@@ -9,6 +9,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using NoMoreEngine.Simulation.Components;
 using NoMoreEngine.Simulation.Bridge;
+using Unity.Entities.UniversalDelegates;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
@@ -364,10 +365,21 @@ namespace NoMoreEngine.Simulation.Snapshot
             
             // Create entity remap table
             entityRemapTable = new NativeHashMap<Entity, Entity>(snapshot.entityCount * 2, Allocator.Temp);
-            
-            // First pass: Create all entities 
-            var newEntities = new NativeArray<Entity>(snapshot.entityCount, Allocator.Temp);
-            entityManager.CreateEntity(entityManager.CreateArchetype(), newEntities);
+
+            // First pass: Use SimulationEntityManager to create entities
+            NativeArray<Entity> newEntities;
+            if (simEntityManager != null)
+            {
+                // This ensures all entities are tracked from creation
+                newEntities = simEntityManager.CreateEntitiesForRestore(snapshot.entityCount, Allocator.Temp);
+            }
+            else
+            {
+                // Fallback if somehow we don't have SimulationEntityManager
+                Debug.LogError("[SnapshotManager] SimulationEntityManager not available! Entities will not be tracked!");
+                newEntities = new NativeArray<Entity>(snapshot.entityCount, Allocator.Temp);
+                entityManager.CreateEntity(entityManager.CreateArchetype(), newEntities);
+            }
             
             // Build remap table
             for (int i = 0; i < snapshot.entityCount; i++)
@@ -384,6 +396,10 @@ namespace NoMoreEngine.Simulation.Snapshot
                 var entitySnapshot = snapshot.entities[i];
                 var entity = newEntities[i];
                 int dataOffset = entitySnapshot.dataOffset;
+
+                // Track what type of entity this is for category update
+                EntityCategory detectedCategory = EntityCategory.Unknown;
+                string entityName = null;
 
                 // Single loop for all types
                 for (int typeIndex = 0; typeIndex < snapshotTypes.Count; typeIndex++)
@@ -413,6 +429,24 @@ namespace NoMoreEngine.Simulation.Snapshot
                         {
                             handler.CopyFromSnapshot(entityManager, entity, (IntPtr)(dataPtr + dataOffset));
 
+                            // Check for SimEntityTypeComponent to determine proper category
+                            if (typeInfo.managedType == typeof(SimEntityTypeComponent))
+                            {
+                                var simEntityComp = entityManager.GetComponentData<SimEntityTypeComponent>(entity);
+
+                                // Map SimEntityType to EntityCategory
+                                detectedCategory = simEntityComp.simEntityType switch
+                                {
+                                    SimEntityType.Player => EntityCategory.Player,
+                                    SimEntityType.Enemy => EntityCategory.Enemy,
+                                    SimEntityType.Projectile => EntityCategory.Projectile,
+                                    SimEntityType.Environment => EntityCategory.Environment,
+                                    _ => EntityCategory.Unknown
+                                };
+
+                                entityName = $"{simEntityComp.simEntityType}_{entity.Index}";
+                            }
+
                             // Advance by the actual size stored
                             if (typeInfo.isBuffer)
                             {
@@ -426,6 +460,12 @@ namespace NoMoreEngine.Simulation.Snapshot
                             }
                         }
                     }
+                }
+
+                // Update entity category now that we know what type it is
+                if (simEntityManager != null && detectedCategory != EntityCategory.Unknown)
+                {
+                    simEntityManager.UpdateEntityCategory(entity, detectedCategory, entityName);
                 }
             }
 

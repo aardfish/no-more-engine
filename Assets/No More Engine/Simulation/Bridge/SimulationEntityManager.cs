@@ -1,9 +1,9 @@
 using Unity.Entities;
-using Unity.Collections;
 using UnityEngine;
 using System.Collections.Generic;
 using NoMoreEngine.Simulation.Components;
 using Unity.Mathematics.FixedPoint;
+using Unity.Collections;
 
 namespace NoMoreEngine.Simulation.Bridge
 {
@@ -221,6 +221,31 @@ namespace NoMoreEngine.Simulation.Bridge
         }
 
         /// <summary>
+        /// Create multiple empty entities for snapshot restoration
+        /// These entities are automatically tracked and will be properly cleaned up
+        /// </summary>
+        public NativeArray<Entity> CreateEntitiesForRestore(int count, Allocator allocator)
+        {
+            // Create empty archetype for restoration
+            var archetype = entityManager.CreateArchetype();
+            
+            // Create entities
+            var entities = new NativeArray<Entity>(count, allocator);
+            entityManager.CreateEntity(archetype, entities);
+            
+            // Pre-track all entities as Unknown category (will be updated during restore)
+            for (int i = 0; i < count; i++)
+            {
+                TrackEntity(entities[i], EntityCategory.Unknown, $"Restoring_{entities[i].Index}");
+            }
+            
+            if (debugLogging)
+                Debug.Log($"[EntityManager] Created and tracked {count} entities for snapshot restore");
+            
+            return entities;
+        }
+
+        /// <summary>
         /// Create a generic entity with custom archetype
         /// </summary>
         public Entity CreateEntity(EntityArchetype archetype, EntityCategory category, string name = null)
@@ -373,6 +398,34 @@ namespace NoMoreEngine.Simulation.Bridge
                 return array;
             }
             return new Entity[0];
+        }
+
+        /// <summary>
+        /// Update the category of a tracked entity after restoration
+        /// </summary>
+        public void UpdateEntityCategory(Entity entity, EntityCategory newCategory, string newName = null)
+        {
+            if (!entityMetadata.TryGetValue(entity, out var metadata))
+            {
+                Debug.LogError($"[EntityManager] Cannot update category for untracked entity {entity.Index}");
+                return;
+            }
+            
+            // Remove from old category
+            categorizedEntities[metadata.category].Remove(entity);
+            
+            // Add to new category
+            categorizedEntities[newCategory].Add(entity);
+            
+            // Update metadata
+            metadata.category = newCategory;
+            if (!string.IsNullOrEmpty(newName))
+                metadata.name = newName;
+            
+            entityMetadata[entity] = metadata;
+            
+            if (debugLogging)
+                Debug.Log($"[EntityManager] Updated entity {entity.Index} from {metadata.category} to {newCategory}");
         }
 
         /// <summary>
