@@ -209,6 +209,7 @@ namespace NoMoreEngine.Session
     {
         private SimulationInitializer simulationInit;
         private SimulationController simulationControl;
+        private InputRecorder inputRecorder;
         private bool simulationActive = false;
         private bool createdBridgeObjects = false;
 
@@ -216,15 +217,30 @@ namespace NoMoreEngine.Session
         {
             base.OnEnter();
 
+            // Get input recorder reference
+            inputRecorder = InputRecorder.Instance;
+
             // Create simulation bridge components
             CreateSimulationBridge();
 
             // Start the simulation
             StartSimulation();
+
+            // start recording input
+            inputRecorder?.StartRecording();
         }
 
         public override void OnExit()
         {
+            // Stop recording and get the recording data
+            var recording = inputRecorder?.StopRecording();
+
+            // Store recording for Results state to handle
+            if (recording != null && recording.FrameCount > 0)
+            {
+                context.lastRecording = recording;
+            }
+
             // Stop simulation
             if (simulationActive)
             {
@@ -337,11 +353,23 @@ namespace NoMoreEngine.Session
     public class ResultsState : SessionStateBase
     {
         private float minDisplayTime = 1f; // Minimum time before allowing exit
-        
+        private bool showingSavePrompt = false;
+        private InputRecording pendingRecording;
+
         public override void OnEnter()
         {
             base.OnEnter();
             Debug.Log("[Results] Showing results screen");
+
+            // Check if we have a recording to save
+            pendingRecording = context.lastRecording;
+            context.lastRecording = null;
+
+            if (pendingRecording != null && pendingRecording.FrameCount > 0)
+            {
+                showingSavePrompt = true;
+                Debug.Log($"[Results] Have recording with {pendingRecording.FrameCount} frames");
+            }
         }
 
         protected override void HandleInput()
@@ -349,14 +377,48 @@ namespace NoMoreEngine.Session
             // Wait a minimum time before allowing exit
             if (stateTime < minDisplayTime) return;
 
-            // Check any player wanting to continue
-            if (NoMoreInput.AnyButtonDown(InputButton.Action1) ||
-                NoMoreInput.AnyButtonDown(InputButton.Action2) ||
-                NoMoreInput.AnyButtonDown(InputButton.Menu1))
+            if (showingSavePrompt && pendingRecording != null)
             {
-                ReturnToMenu();
+                if (NoMoreInput.Player1.GetButtonDown(InputButton.Action1))
+                {
+                    SaveRecording();
+                }
+                else if (NoMoreInput.Player1.GetButtonDown(InputButton.Action2))
+                {
+                    DiscardRecording();
+                }
+            }
+            else
+            {
+                // Check any player wanting to continue
+                if (NoMoreInput.AnyButtonDown(InputButton.Action1) ||
+                    NoMoreInput.AnyButtonDown(InputButton.Action2) ||
+                    NoMoreInput.AnyButtonDown(InputButton.Menu1))
+                {
+                    ReturnToMenu();
+                }
             }
         }
+
+        private void SaveRecording()
+        {
+            string filename = $"Replay_{DateTime.Now:yyyyMMdd_HHmmss}";
+            InputRecorder.SaveRecording(pendingRecording, filename);
+            showingSavePrompt = false;
+            pendingRecording = null;
+        }
+
+        private void DiscardRecording()
+        {
+            Debug.Log($"[Results] Discarded recording ({pendingRecording.FrameCount} frames)");
+            showingSavePrompt = false;
+            pendingRecording = null;
+        }
+
+        // Public getter for UI
+        public bool HasPendingRecording => showingSavePrompt && pendingRecording != null;
+        public int PendingRecordingFrames => pendingRecording?.FrameCount ?? 0;
+        public float PendingRecordingDuration => pendingRecording?.DurationSeconds ?? 0f;
 
         private void ReturnToMenu()
         {

@@ -130,13 +130,41 @@ namespace NoMoreEngine.Viewer.UI
 
         private void DrawResults()
         {
-            GUILayout.BeginArea(new Rect(Screen.width/2 - 200, Screen.height/2 - 100, 400, 200));
+            var resultsState = coordinator.GetState<ResultsState>();
+
+            GUILayout.BeginArea(new Rect(Screen.width/2 - 200, Screen.height/2 - 150, 400, 300));
             GUILayout.BeginVertical("box");
 
             GUILayout.Label("MISSION COMPLETE", GetTitleStyle());
             GUILayout.Space(20);
 
-            GUILayout.Label("Press any button to continue", GetLabelStyle());
+            // Show save replay prompt if we have a recording
+            if (resultsState != null && resultsState.HasPendingRecording)
+            {
+                GUI.color = Color.yellow;
+                GUILayout.Label("SAVE REPLAY?", GetTitleStyle());
+                GUI.color = Color.white;
+
+                GUILayout.Label($"Recording: {resultsState.PendingRecordingFrames} frames", GetLabelStyle());
+                GUILayout.Label($"Duration: {resultsState.PendingRecordingDuration:F1} seconds", GetLabelStyle());
+
+                GUILayout.Space(20);
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("Save (A/Space)", GetButtonStyle()))
+                {
+                    // Input handling is in ResultsState
+                }
+                if (GUILayout.Button("Discard (B/F)", GetButtonStyle()))
+                {
+                    // Input handling is in ResultsState
+                }
+                GUILayout.EndHorizontal();
+            }
+            else
+            {
+                GUILayout.Label("Press any button to continue", GetLabelStyle());
+            }
 
             GUILayout.EndVertical();
             GUILayout.EndArea();

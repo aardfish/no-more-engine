@@ -225,6 +225,7 @@ namespace NoMoreEngine.Session
     {
         public SessionCoordinator coordinator;
         public GameConfiguration gameConfig;
+        public InputRecording lastRecording;
     }
 
     /// <summary>
