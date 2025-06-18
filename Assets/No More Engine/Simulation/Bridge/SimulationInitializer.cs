@@ -74,12 +74,7 @@ namespace NoMoreEngine.Simulation.Bridge
         {
             Debug.Log("[SimulationInit] Cleaning up match entities");
 
-            // Our Simulation Entity Manager does this now
-            simEntityManager.DestroyAllInCategory(EntityCategory.Player);
-            simEntityManager.DestroyAllInCategory(EntityCategory.Enemy);
-            simEntityManager.DestroyAllInCategory(EntityCategory.Projectile);
-            simEntityManager.DestroyAllInCategory(EntityCategory.Environment);
-            simEntityManager.DestroyAllInCategory(EntityCategory.Pickup);
+            simEntityManager.DestroyAllManagedEntities();
         }
 
         private void EnsureSimulationSingletons()

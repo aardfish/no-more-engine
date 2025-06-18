@@ -21,7 +21,7 @@ namespace NoMoreEngine.Simulation.Snapshot
     {
         private World world;
         private EntityManager entityManager;
-        private SimulationEntityManager simEntityManager;
+        private SimulationEntityManager simEntityManager => SimulationEntityManager.Instance;
 
         // Single unified type list
         private List<SnapshotTypeInfo> snapshotTypes;
@@ -54,14 +54,7 @@ namespace NoMoreEngine.Simulation.Snapshot
             this.snapshots = new Dictionary<uint, SimulationSnapshot>(maxSnapshots);
             this.typeToIndex = new Dictionary<Type, int>();
             this.handlers = new Dictionary<Type, ISnapshotHandler>();
-
-            // Get SimulationEntityManager
-            simEntityManager = SimulationEntityManager.Instance;
-            if (simEntityManager == null)
-            {
-                Debug.LogError("[SnapshotManager] SimulationEntityManager not found!");
-            }
-
+            
             // Discover all snapshotable types
             DiscoverSnapshotableTypes();
 

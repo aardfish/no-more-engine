@@ -321,15 +321,35 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public void DestroyAllManagedEntities()
         {
+            Debug.Log($"[EntityManager] DestroyAllManagedEntities called - tracking {allSimulationEntities.Count} entities");
+
+            // Log category breakdown
+            foreach (var kvp in categorizedEntities)
+            {
+                if (kvp.Value.Count < 0)
+                {
+                    Debug.Log($"[EntityManager] Category {kvp.Key}: {kvp.Value.Count} entities");
+                }
+            }
+
             // Copy to avoid modification during iteration
             var toDestroy = new Entity[allSimulationEntities.Count];
             allSimulationEntities.CopyTo(toDestroy);
+
+            int destroyedCount = 0;
+            int notExistCount = 0;
 
             foreach (var entity in toDestroy)
             {
                 if (entityManager.Exists(entity))
                 {
                     entityManager.DestroyEntity(entity);
+                    destroyedCount++;
+                }
+                else
+                {
+                    notExistCount++;
+                    Debug.LogWarning($"[EntityManager] Tracked entity {entity.Index} no longer exists!");
                 }
             }
 
@@ -341,7 +361,7 @@ namespace NoMoreEngine.Simulation.Bridge
                 category.Clear();
             }
 
-            Debug.Log($"[EntityManager] Destroyed all {toDestroy.Length} managed entities");
+            Debug.Log($"[EntityManager] Destroyed {destroyedCount} entities, {notExistCount} were already gone");
         }
 
         #endregion

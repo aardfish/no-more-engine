@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using NoMoreEngine.Simulation.Systems;
 using NoMoreEngine.Input;
 using Unity.Mathematics.FixedPoint;
+using NoMoreEngine.Simulation.Bridge;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
@@ -151,22 +152,31 @@ namespace NoMoreEngine.Simulation.Snapshot
 
         private void DestroyGameEntities()
         {
-            // Destroy all entities except critical singletons
-            var gameEntityQuery = EntityManager.CreateEntityQuery(
-                new EntityQueryDesc
-                {
-                    Any = new ComponentType[]
+            // Use SimulationEntityManager to destroy all tracked entities
+            // This ensures tracking stays in sync
+            if (SimulationEntityManager.Instance != null)
+            {
+                SimulationEntityManager.Instance.DestroyAllManagedEntities();
+            }
+            else
+            {
+                // Fallback if SimulationEntityManager not available
+                var gameEntityQuery = EntityManager.CreateEntityQuery(
+                    new EntityQueryDesc
                     {
-                        typeof(SimEntityTypeComponent),
-                        typeof(FixTransformComponent),
-                        typeof(SimpleMovementComponent)
-                    },
-                    Options = EntityQueryOptions.IncludeDisabledEntities
-                }
-            );
+                        Any = new ComponentType[]
+                        {
+                            typeof(SimEntityTypeComponent),
+                            typeof(FixTransformComponent),
+                            typeof(SimpleMovementComponent)
+                        },
+                        Options = EntityQueryOptions.IncludeDisabledEntities
+                    }
+                );
 
-            EntityManager.DestroyEntity(gameEntityQuery);
-            gameEntityQuery.Dispose();
+                EntityManager.DestroyEntity(gameEntityQuery);
+                gameEntityQuery.Dispose();
+            }
         }
 
         /// <summary>
