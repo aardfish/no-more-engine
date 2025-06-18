@@ -5,23 +5,19 @@ using Unity.Entities;
 namespace NoMoreEngine.Input
 {
     /// <summary>
-    /// Enhanced InputProcessor with Unity frame-based edge detection
-    /// Processes raw InputPackets and provides frame-accurate button states
+    /// Deterministic InputProcessor that processes InputPackets without Unity frame dependencies
+    /// Provides edge detection (button down/up) by comparing consecutive packets
     /// </summary>
     public class InputProcessor : MonoBehaviour
     {
         [Header("Settings")]
         [SerializeField] private int inputHistorySize = 60;
-        //[SerializeField] private bool debugLogging = false;
 
         // Input source
         private InputSerializer inputSerializer;
 
         // Per-player input states
         private Dictionary<byte, PlayerInputState> playerStates = new Dictionary<byte, PlayerInputState>();
-
-        // Unity frame tracking
-        private int lastProcessedFrame = -1;
         
         // Singleton for easy access
         private static InputProcessor instance;
@@ -66,28 +62,6 @@ namespace NoMoreEngine.Input
             }
         }
 
-        void Update()
-        {
-            // Process Unity frame edge detection
-            if (Time.frameCount != lastProcessedFrame)
-            {
-                ProcessUnityFrameEdgeDetection();
-                lastProcessedFrame = Time.frameCount;
-            }
-        }
-
-        /// <summary>
-        /// Process Unity frame-based edge detection
-        /// This runs once per Unity frame to ensure accurate button up/down detection
-        /// </summary>
-        private void ProcessUnityFrameEdgeDetection()
-        {
-            foreach (var playerState in playerStates.Values)
-            {
-                playerState.ProcessUnityFrame();
-            }
-        }
-
         /// <summary>
         /// Process raw input packets from InputSerializer
         /// </summary>
@@ -120,7 +94,7 @@ namespace NoMoreEngine.Input
         }
 
         /// <summary>
-        /// Get if button was pressed this Unity frame
+        /// Get if button was pressed this simulation frame
         /// </summary>
         public bool GetButtonDown(byte playerIndex, InputButton button)
         {
@@ -132,7 +106,7 @@ namespace NoMoreEngine.Input
         }
 
         /// <summary>
-        /// Get if button was released this Unity frame
+        /// Get if button was released this simulation frame
         /// </summary>
         public bool GetButtonUp(byte playerIndex, InputButton button)
         {
@@ -180,6 +154,18 @@ namespace NoMoreEngine.Input
         }
 
         /// <summary>
+        /// Get the latest raw input packet for a player
+        /// </summary>
+        public InputPacket GetLatestPacket(byte playerIndex)
+        {
+            if (playerStates.TryGetValue(playerIndex, out var state))
+            {
+                return state.GetLatestPacket();
+            }
+            return default;
+        }
+
+        /// <summary>
         /// Register player entity (for compatibility)
         /// </summary>
         public void RegisterPlayerEntity(Entity entity, byte playerIndex)
@@ -193,24 +179,20 @@ namespace NoMoreEngine.Input
     }
 
     /// <summary>
-    /// Enhanced player input state with Unity frame tracking
+    /// Deterministic player input state using packet comparison for edge detection
     /// </summary>
     public class PlayerInputState
     {
         private byte playerIndex;
         private int maxHistorySize;
 
-        // Current input state (latest from packets)
+        // Current and previous packets for edge detection
         private InputPacket currentPacket;
+        private InputPacket previousPacket;
         private bool hasReceivedInput = false;
+        private bool hasPreviousPacket = false;
 
-        // Unity frame state tracking
-        private int lastUnityFrame = -1;
-        private ushort lastFrameButtons = 0;
-        private ushort buttonsPressed = 0;
-        private ushort buttonsReleased = 0;
-
-        // Input history
+        // Input history for replay/rollback support
         private Queue<InputPacket> packetHistory;
 
         public PlayerInputState(byte playerIndex, int historySize)
@@ -225,6 +207,13 @@ namespace NoMoreEngine.Input
         /// </summary>
         public void UpdateFromPacket(InputPacket packet)
         {
+            // Only update previous if we had a current packet
+            if (hasReceivedInput)
+            {
+                previousPacket = currentPacket;
+                hasPreviousPacket = true;
+            }
+
             currentPacket = packet;
             hasReceivedInput = true;
 
@@ -236,33 +225,6 @@ namespace NoMoreEngine.Input
             }
         }
 
-        /// <summary>
-        /// Process edge detection for current Unity frame
-        /// </summary>
-        public void ProcessUnityFrame()
-        {
-            if (!hasReceivedInput) return;
-
-            int currentFrame = Time.frameCount;
-            
-            // First frame with this state
-            if (lastUnityFrame != currentFrame - 1)
-            {
-                // Gap in frames, treat as fresh state
-                buttonsPressed = 0;
-                buttonsReleased = 0;
-            }
-            else
-            {
-                // Calculate edge detection
-                buttonsPressed = (ushort)(~lastFrameButtons & currentPacket.buttons);
-                buttonsReleased = (ushort)(lastFrameButtons & ~currentPacket.buttons);
-            }
-
-            lastFrameButtons = currentPacket.buttons;
-            lastUnityFrame = currentFrame;
-        }
-
         // Public accessors
         public bool GetButton(InputButton button)
         {
@@ -272,16 +234,24 @@ namespace NoMoreEngine.Input
 
         public bool GetButtonDown(InputButton button)
         {
-            if (!hasReceivedInput) return false;
-            int buttonBit = 1 << (int)button;
-            return (buttonsPressed & buttonBit) != 0;
+            if (!hasReceivedInput || !hasPreviousPacket) return false;
+            
+            // Button is pressed this packet but wasn't pressed last packet
+            bool currentPressed = currentPacket.GetButton(button);
+            bool previousPressed = previousPacket.GetButton(button);
+            
+            return currentPressed && !previousPressed;
         }
 
         public bool GetButtonUp(InputButton button)
         {
-            if (!hasReceivedInput) return false;
-            int buttonBit = 1 << (int)button;
-            return (buttonsReleased & buttonBit) != 0;
+            if (!hasReceivedInput || !hasPreviousPacket) return false;
+            
+            // Button was pressed last packet but isn't pressed this packet
+            bool currentPressed = currentPacket.GetButton(button);
+            bool previousPressed = previousPacket.GetButton(button);
+            
+            return !currentPressed && previousPressed;
         }
 
         public Vector2 GetMotion()
@@ -305,6 +275,26 @@ namespace NoMoreEngine.Input
         public InputPacket GetLatestPacket()
         {
             return currentPacket;
+        }
+
+        /// <summary>
+        /// Get input history for replay/rollback
+        /// </summary>
+        public InputPacket[] GetHistory()
+        {
+            return packetHistory.ToArray();
+        }
+
+        /// <summary>
+        /// Reset state (useful for snapshot restoration)
+        /// </summary>
+        public void Reset()
+        {
+            hasReceivedInput = false;
+            hasPreviousPacket = false;
+            currentPacket = default;
+            previousPacket = default;
+            packetHistory.Clear();
         }
     }
 }

@@ -2,12 +2,14 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using System.Collections.Generic;
 using System.Linq;
+using Unity.Entities;
+using NoMoreEngine.Simulation.Systems;
 
 namespace NoMoreEngine.Input
 {
     /// <summary>
     /// Input Serializer - Converts Unity Input System data into deterministic input packets
-    /// Handles input buffering, device management, and context switching
+    /// Samples input every Unity frame, delivers packets via SimulationTimeSystem events
     /// </summary>
     public class InputSerializer : MonoBehaviour
     {
@@ -31,10 +33,8 @@ namespace NoMoreEngine.Input
         private Dictionary<byte, Queue<InputSample>> playerInputBuffers = new Dictionary<byte, Queue<InputSample>>();
         private Dictionary<byte, InputPacket> lastKnownInput = new Dictionary<byte, InputPacket>();
 
-        // Frame tracking
-        private uint currentFrameNumber = 0;
-        private float lastSimulationTime = 0f;
-        private const float SIMULATION_FIXED_TIMESTEP = 1f / 60f; // 60fps
+        // Simulation integration
+        private SimulationTimeSystem timeSystem;
 
         // Events
         public System.Action<InputPacket[]> OnInputPacketsReady;
@@ -69,18 +69,47 @@ namespace NoMoreEngine.Input
             SwitchActionMap(currentContext);
         }
 
+        void Start()
+        {
+            // Get reference to SimulationTimeSystem and subscribe to tick events
+            var world = World.DefaultGameObjectInjectionWorld;
+            if (world != null)
+            {
+                timeSystem = world.GetExistingSystemManaged<SimulationTimeSystem>();
+                if (timeSystem != null)
+                {
+                    timeSystem.OnSimulationTick += OnSimulationTick;
+                    Debug.Log("[InputSerializer] Subscribed to SimulationTimeSystem tick events");
+                }
+                else
+                {
+                    Debug.LogError("[InputSerializer] SimulationTimeSystem not found!");
+                }
+            }
+        }
+
+        void OnDestroy()
+        {
+            // Unsubscribe from tick events
+            if (timeSystem != null)
+            {
+                timeSystem.OnSimulationTick -= OnSimulationTick;
+            }
+        }
+
         void Update()
         {
-            // Sample input every Unity frame
+            // Sample input every Unity frame for maximum responsiveness
+            // This ensures we never miss button presses between simulation ticks
             SampleAllPlayerInput();
+        }
 
-            // Check if it's time for a simulation tick
-            if (Time.time >= lastSimulationTime + SIMULATION_FIXED_TIMESTEP)
-            {
-                GenerateInputPacketsForSimulation();
-                lastSimulationTime = Time.time;
-                currentFrameNumber++;
-            }
+        /// <summary>
+        /// Called by SimulationTimeSystem when a simulation tick occurs
+        /// </summary>
+        private void OnSimulationTick(uint tick)
+        {
+            GenerateInputPacketsForTick(tick);
         }
 
         /// <summary>
@@ -111,7 +140,7 @@ namespace NoMoreEngine.Input
             if (!playerInputBuffers.ContainsKey(playerIndex))
             {
                 playerInputBuffers[playerIndex] = new Queue<InputSample>();
-                lastKnownInput[playerIndex] = new InputPacket(0, 0, 0, 0, 0, currentFrameNumber, playerIndex);
+                lastKnownInput[playerIndex] = new InputPacket(0, 0, 0, 0, 0, 0, playerIndex);
             }
 
             if (debugLogging)
@@ -214,7 +243,8 @@ namespace NoMoreEngine.Input
                 }
             }
 
-            return new InputPacket(motionAxis, viewAxisX, viewAxisY, pad, buttons, currentFrameNumber, playerIndex);
+            // Frame number will be set when packet is delivered
+            return new InputPacket(motionAxis, viewAxisX, viewAxisY, pad, buttons, 0, playerIndex);
         }
 
         /// <summary>
@@ -271,9 +301,10 @@ namespace NoMoreEngine.Input
         }
 
         /// <summary>
-        /// Generate input packets for simulation consumption (called at 60fps)
+        /// Generate input packets for a specific simulation tick
+        /// Called by SimulationTimeSystem via event
         /// </summary>
-        private void GenerateInputPacketsForSimulation()
+        private void GenerateInputPacketsForTick(uint tick)
         {
             var inputPackets = new List<InputPacket>();
 
@@ -282,42 +313,28 @@ namespace NoMoreEngine.Input
                 byte playerIndex = kvp.Key;
                 var buffer = kvp.Value;
 
-                // Get the most recent unconsumed input
-                InputSample? latestSample = null;
-                var samples = buffer.ToArray();
-
-                for (int i = samples.Length - 1; i >= 0; i--)
-                {
-                    if (!samples[i].consumed)
-                    {
-                        latestSample = samples[i];
-                        break;
-                    }
-                }
-
+                // Get the most recent input sample
                 InputPacket packetToUse;
-                if (latestSample.HasValue)
+                
+                if (buffer.Count > 0)
                 {
-                    packetToUse = latestSample.Value.packet;
-                    packetToUse.frameNumber = currentFrameNumber;
-
-                    // Mark this sample as consumed
-                    var tempSamples = buffer.ToArray();
+                    // Use the most recent sample
+                    var samples = buffer.ToArray();
+                    var latestSample = samples[samples.Length - 1];
+                    packetToUse = latestSample.packet;
+                    
+                    // Clear the buffer since we've consumed up to this point
                     buffer.Clear();
-                    foreach (var sample in tempSamples)
-                    {
-                        var updatedSample = sample;
-                        if (sample.timestamp == latestSample.Value.timestamp)
-                            updatedSample.consumed = true;
-                        buffer.Enqueue(updatedSample);
-                    }
                 }
                 else
                 {
-                    // No new input, use last known input
+                    // No new input, repeat last known input
                     packetToUse = lastKnownInput[playerIndex];
-                    packetToUse.frameNumber = currentFrameNumber;
                 }
+
+                // Set the correct frame number for this tick
+                packetToUse.frameNumber = tick;
+                packetToUse.playerIndex = playerIndex; // Ensure player index is set
 
                 lastKnownInput[playerIndex] = packetToUse;
                 inputPackets.Add(packetToUse);
@@ -327,7 +344,7 @@ namespace NoMoreEngine.Input
             OnInputPacketsReady?.Invoke(inputPackets.ToArray());
 
             if (debugLogging)
-                Debug.Log($"[InputSerializer] Generated {inputPackets.Count} input packets for frame {currentFrameNumber}");
+                Debug.Log($"[InputSerializer] Delivered {inputPackets.Count} packets for sim tick {tick}");
         }
 
         /// <summary>
@@ -377,8 +394,11 @@ namespace NoMoreEngine.Input
         }
 
         /// <summary>
-        /// Public API to get current frame number
+        /// Get current frame number (for debugging)
         /// </summary>
-        public uint GetCurrentFrameNumber() => currentFrameNumber;
+        public uint GetCurrentFrameNumber()
+        {
+            return timeSystem != null ? timeSystem.GetCurrentTick() : 0;
+        }
     }
 }

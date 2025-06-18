@@ -342,6 +342,7 @@ GameObject:
   - component: {fileID: 91482594}
   - component: {fileID: 91482595}
   - component: {fileID: 91482593}
+  - component: {fileID: 91482596}
   m_Layer: 0
   m_Name: Input Serializer
   m_TagString: Untagged
@@ -376,8 +377,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9dbe8ff5897c43f4e96c4656f4332fe9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  enableInspectorMonitoring: 0
-  showDebugGUI: 0
+  enableInspectorMonitoring: 1
+  showDebugGUI: 1
   currentFrame: 0
   motionAxis: 5
   motionVector: {x: 0, y: 0}
@@ -422,7 +423,28 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   inputHistorySize: 60
-  debugLogging: 0
+--- !u!114 &91482596
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 91482589}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8be12ba77e3ece6448078ff6fe6e016e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  showDisplay: 1
+  maxHistoryLines: 20
+  displayWidth: 400
+  toggleKey: 9
+  showTickNumber: 1
+  showMotionNumpad: 1
+  showButtonNames: 1
+  showRawValues: 0
+  activeInputColor: {r: 0, g: 1, b: 1, a: 1}
+  inactiveColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.5}
 --- !u!1 &237625942
 GameObject:
   m_ObjectHideFlags: 0
@@ -663,7 +685,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   autoInitialize: 1
-  createDefaultGravity: 1
 --- !u!114 &883739449
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -671,7 +692,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 883739444}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 52edec930b7221f41b0ffae65c00a99e, type: 3}
   m_Name: 
@@ -753,7 +774,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1534994480}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 93d05ea516c6c3e47add115aef7e527d, type: 3}
   m_Name: 

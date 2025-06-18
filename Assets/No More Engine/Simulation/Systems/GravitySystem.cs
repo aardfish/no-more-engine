@@ -11,6 +11,7 @@ namespace NoMoreEngine.Simulation.Systems
     /// Now uses deterministic time from SimulationTimeComponent
     /// </summary>
     [UpdateInGroup(typeof(PhysicsPhase))]
+    [UpdateBefore(typeof(SimpleMovementSystem))]
     public partial struct GravitySystem : ISystem
     {
         private EntityQuery globalGravityQuery;
@@ -28,7 +29,7 @@ namespace NoMoreEngine.Simulation.Systems
             physicsEntitiesQuery = SystemAPI.QueryBuilder()
                 .WithAll<SimpleMovementComponent, PhysicsComponent>()
                 .Build();
-                
+
             // Require time component
             state.RequireForUpdate<SimulationTimeComponent>();
         }
