@@ -3,6 +3,8 @@ using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using System;
 using System.Runtime.InteropServices;
+using UnityEngine;
+using System.Reflection;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
@@ -61,6 +63,20 @@ namespace NoMoreEngine.Simulation.Snapshot
         {
             this.tick = tick;
             this.hash = 0;
+
+            // Validate parameters to prevent massive allocations
+            if (maxDataSize <= 0 || maxDataSize > 10 * 1024 * 1024) // 10MB max
+            {
+                Debug.LogError($"[SimulationSnapshot] Invalid maxDataSize: {maxDataSize}, using default");
+                maxDataSize = 1024 * 1024; // 1MB default
+            }
+
+            if (maxEntities <= 0 || maxEntities > 100000) // 100k max
+            {
+                Debug.LogError($"[SimulationSnapshot] Invalid maxEntities: {maxEntities}, using default");
+                maxEntities = 10000;
+            }
+
             this.data = new NativeArray<byte>(maxDataSize, Allocator.Persistent);
             this.entities = new NativeArray<EntitySnapshot>(maxEntities, Allocator.Persistent);
             this.dataSize = 0;
@@ -153,20 +169,26 @@ namespace NoMoreEngine.Simulation.Snapshot
         
         private static int GetTypeSize(Type type)
         {
+            // Check if this is a tag component (has no fields)
+            var fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            
+            if (fields.Length == 0)
+            {
+                Debug.Log($"[SnapshotTypeInfo] Type {type.Name} is a tag component (no fields)");
+                return 0; // Mark as zero-sized for our purposes
+            }
+            
             try
             {
-                return UnsafeUtility.SizeOf(type);
+                int size = UnsafeUtility.SizeOf(type);
+                Debug.Log($"[SnapshotTypeInfo] Type {type.Name} has size: {size} with {fields.Length} fields");
+                return size;
             }
-            catch
+            catch (Exception e)
             {
-                return 0; // Zero-sized component
+                Debug.Log($"[SnapshotTypeInfo] Type {type.Name} size check failed: {e.Message}");
+                return 0;
             }
-        }
-        
-        public int GetMaxBufferSize()
-        {
-            if (!isBuffer) return 0;
-            return sizeof(int) + (maxElements * size);
         }
     }
 

@@ -196,6 +196,24 @@ namespace NoMoreEngine.DevTools
         
         void CaptureSnapshotWithPositions()
         {
+            // Debug check for PlayerControlledTag
+            var playerQuery = entityManager.CreateEntityQuery(typeof(PlayerControlledTag));
+            var playerEntities = playerQuery.ToEntityArray(Allocator.Temp);
+            Debug.Log($"[VisualSnapshotTest] Found {playerEntities.Length} entities with PlayerControlledTag");
+            
+            foreach (var entity in playerEntities)
+            {
+                // This should work for tag components
+                bool hasTag = entityManager.HasComponent<PlayerControlledTag>(entity);
+                Debug.Log($"[VisualSnapshotTest] Entity {entity.Index} has PlayerControlledTag: {hasTag}");
+                
+                // This would throw for tag components
+                // DON'T UNCOMMENT: var tag = entityManager.GetComponentData<PlayerControlledTag>(entity);
+            }
+            
+            playerEntities.Dispose();
+            playerQuery.Dispose();
+            
             // Capture entity positions before snapshot
             snapshotPositions.Clear();
             var query = entityManager.CreateEntityQuery(

@@ -41,7 +41,10 @@ namespace NoMoreEngine.Simulation.Bridge
                 Debug.LogError("[SimulationInit] No ECS world available!");
                 return false;
             }
-            
+
+            // Get EntityManager from world
+            entityManager = simulationWorld.EntityManager;
+
             // Initialize our simulation entity manager with world
             simEntityManager.Initialize(simulationWorld);
 
@@ -71,7 +74,7 @@ namespace NoMoreEngine.Simulation.Bridge
 
             simEntityManager.DestroyAllManagedEntities();
         }
-        
+
         private void CreateStage(string stageName)
         {
             Debug.Log($"[SimulationInit] Creating stage: {stageName}");

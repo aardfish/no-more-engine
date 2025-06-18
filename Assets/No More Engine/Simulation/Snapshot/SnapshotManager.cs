@@ -131,7 +131,8 @@ namespace NoMoreEngine.Simulation.Snapshot
                 typeToIndex[type] = i;
                 CreateHandler(type, typeInfo);
 
-                Debug.Log($"[SnapshotManager] [{i}] Registered {(isBuffer ? "buffer" : "component")}: {type.Name} " + $"(size: {typeInfo.size}, priority: {attr.Priority})");
+                Debug.Log($"[SnapshotManager] [{i}] Registered {(isBuffer ? "buffer" : "component")}: {type.Name} " + 
+                $"(size: {typeInfo.size}, priority: {attr.Priority}, isTag: {typeInfo.size == 0})");
             }
 
             Debug.Log($"[SnapshotManager] Excluded singleton types from snapshot discovery");
@@ -159,15 +160,29 @@ namespace NoMoreEngine.Simulation.Snapshot
                         handler = Activator.CreateInstance(handlerType, typeInfo) as ISnapshotHandler;
                     }
                 }
+
                 else
                 {
-                    var handlerType = typeof(GenericComponentHandler<>).MakeGenericType(type);
-                    handler = Activator.CreateInstance(handlerType, typeInfo) as ISnapshotHandler;
+                    // Check if it's a zero-sized (tag) component
+                    if (typeInfo.size == 0)
+                    {
+                        Debug.Log($"[SnapshotManager] Creating TagComponentHandler for zero-sized component: {type.Name}");
+                        // Create a special handler for tag components
+                        var handlerType = typeof(TagComponentHandler<>).MakeGenericType(type);
+                        handler = Activator.CreateInstance(handlerType, typeInfo) as ISnapshotHandler;
+                    }
+
+                    else
+                    {
+                        var handlerType = typeof(GenericComponentHandler<>).MakeGenericType(type);
+                        handler = Activator.CreateInstance(handlerType, typeInfo) as ISnapshotHandler;
+                    }
                 }
 
                 if (handler != null)
                 {
                     handlers[type] = handler;
+                    Debug.Log($"[SnapshotManager] Handler created for {type.Name}: {handler.GetType().Name}");
                 }
             }
             catch (Exception e)
@@ -203,6 +218,8 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         public bool CaptureSnapshot(uint tick)
         {
+            Debug.Log("[SnapshotManager] CaptureSnapshot called - VERSION 2");
+
             var startTime = Time.realtimeSinceStartupAsDouble;
             
             // Check if we already have a snapshot for this tick
@@ -256,6 +273,15 @@ namespace NoMoreEngine.Simulation.Snapshot
         private unsafe void CaptureEntities(ref SimulationSnapshot snapshot)
         {
             var entities = snapshotQuery.ToEntityArray(Allocator.Temp);
+
+            // Validate entity count
+            if (entities.Length > snapshot.entities.Length)
+            {
+                Debug.LogError($"[SnapshotManager] Too many entities ({entities.Length}) for snapshot buffer ({snapshot.entities.Length})");
+                entities.Dispose();
+                return;
+            }
+
             var dataPtr = (byte*)snapshot.data.GetUnsafePtr();
             int currentOffset = 0;
             int entityIndex = 0;
@@ -265,6 +291,13 @@ namespace NoMoreEngine.Simulation.Snapshot
                 if (entityIndex >= snapshot.entities.Length)
                 {
                     Debug.LogWarning("[SnapshotManager] Too many entities for snapshot buffer");
+                    break;
+                }
+
+                // Validate we have space for data
+                if (currentOffset >= snapshot.data.Length - 1024)
+                {
+                    Debug.LogError("[SnapshotManager] Snapshot data buffer full!");
                     break;
                 }
                 
@@ -312,6 +345,13 @@ namespace NoMoreEngine.Simulation.Snapshot
             
             snapshot.entityCount = entityIndex;
             snapshot.dataSize = currentOffset;
+
+            // Validate final values
+            if (snapshot.entityCount < 0 || snapshot.entityCount > snapshot.entities.Length)
+            {
+                Debug.LogError($"[SnapshotManager] Invalid entity count: {snapshot.entityCount}");
+                snapshot.entityCount = 0;
+            }
             
             entities.Dispose();
         }
@@ -328,6 +368,19 @@ namespace NoMoreEngine.Simulation.Snapshot
                 Debug.LogError($"[SnapshotManager] No snapshot found for tick {tick}");
                 return false;
             }
+
+            // Validate snapshot before attempting restore
+            if (snapshot.entityCount < 0 || snapshot.entityCount > DEFAULT_MAX_ENTITIES)
+            {
+                Debug.LogError($"[SnapshotManager] Corrupted snapshot - invalid entity count: {snapshot.entityCount}");
+                return false;
+            }
+            
+            if (snapshot.dataSize < 0 || snapshot.dataSize > snapshot.data.Length)
+            {
+                Debug.LogError($"[SnapshotManager] Corrupted snapshot - invalid data size: {snapshot.dataSize}");
+                return false;
+            }
             
             try
             {
@@ -341,14 +394,14 @@ namespace NoMoreEngine.Simulation.Snapshot
                     // Fallback
                     entityManager.DestroyEntity(snapshotQuery);
                 }
-                
+
                 // Restore entities from snapshot
                 RestoreEntities(ref snapshot);
-                
+
                 lastRestoreTime = (Time.realtimeSinceStartupAsDouble - startTime) * 1000.0;
-                
+
                 Debug.Log($"[SnapshotManager] Restored snapshot for tick {tick} in {lastRestoreTime:F2}ms");
-                
+
                 return true;
             }
             catch (Exception e)
@@ -363,6 +416,13 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         private unsafe void RestoreEntities(ref SimulationSnapshot snapshot)
         {
+            // Extra validation
+            if (snapshot.entityCount <= 0 || snapshot.entityCount > DEFAULT_MAX_ENTITIES)
+            {
+                Debug.LogError($"[SnapshotManager] Invalid entity count in snapshot: {snapshot.entityCount}");
+                return;
+            }
+
             var dataPtr = (byte*)snapshot.data.GetUnsafeReadOnlyPtr();
             
             // Create entity remap table
@@ -649,25 +709,35 @@ namespace NoMoreEngine.Simulation.Snapshot
     public class GenericComponentHandler<T> : ISnapshotHandler where T : unmanaged, IComponentData
     {
         private readonly SnapshotTypeInfo typeInfo;
-        
+
         public GenericComponentHandler(SnapshotTypeInfo typeInfo)
         {
             this.typeInfo = typeInfo;
         }
-        
+
         public unsafe void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten)
         {
-            bytesWritten = typeInfo.size;
+            // Check if this is a tag component by looking for fields
+            var fields = typeof(T).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            bool isTagComponent = fields.Length == 0;
             
-            if (typeInfo.size == 0) 
+            Debug.Log($"[GenericComponentHandler] {typeof(T).Name}: size={typeInfo.size}, fields={fields.Length}, isTag={isTagComponent}");
+            
+            if (isTagComponent || typeInfo.size == 0) 
             {
-                // Tag component - nothing to copy, but we track that it exists
+                // Tag component - use HasComponent only
+                bytesWritten = 0;
+                if (!em.HasComponent<T>(entity))
+                {
+                    Debug.LogWarning($"[GenericComponentHandler] Entity {entity} missing expected tag component {typeof(T).Name}");
+                }
                 return;
             }
             
+            bytesWritten = typeInfo.size;
+            
             try
             {
-                // For non-zero sized components, use GetComponentData
                 var component = em.GetComponentData<T>(entity);
                 UnsafeUtility.CopyStructureToPtr(ref component, (void*)dest);
             }
@@ -677,10 +747,10 @@ namespace NoMoreEngine.Simulation.Snapshot
                 bytesWritten = 0;
             }
         }
-        
+
         public unsafe void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src)
         {
-            if (typeInfo.size == 0) 
+            if (typeInfo.size == 0)
             {
                 // Tag component - just ensure it exists
                 if (!em.HasComponent<T>(entity))
@@ -689,7 +759,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                 }
                 return;
             }
-            
+
             try
             {
                 // For non-zero sized components, use SetComponentData
@@ -700,6 +770,42 @@ namespace NoMoreEngine.Simulation.Snapshot
             catch (Exception e)
             {
                 Debug.LogError($"[SnapshotHandler] Failed to restore component {typeof(T).Name}: {e.Message}");
+            }
+        }
+
+        public void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap) { }
+        public bool RequiresRemapping => false;
+    }
+    
+    /// <summary>
+    /// Handler for zero-sized tag components
+    /// </summary>
+    public class TagComponentHandler<T> : ISnapshotHandler where T : unmanaged, IComponentData
+    {
+        private readonly SnapshotTypeInfo typeInfo;
+        
+        public TagComponentHandler(SnapshotTypeInfo typeInfo)
+        {
+            this.typeInfo = typeInfo;
+        }
+        
+        public unsafe void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten)
+        {
+            // Tag components have no data to copy
+            bytesWritten = 0;
+            // We just verify the component exists
+            if (!em.HasComponent<T>(entity))
+            {
+                Debug.LogWarning($"[TagComponentHandler] Entity {entity} missing expected tag component {typeof(T).Name}");
+            }
+        }
+        
+        public unsafe void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src)
+        {
+            // Just ensure the tag exists on the entity
+            if (!em.HasComponent<T>(entity))
+            {
+                em.AddComponent<T>(entity);
             }
         }
         
@@ -713,12 +819,12 @@ namespace NoMoreEngine.Simulation.Snapshot
     public class GenericBufferHandler<T> : ISnapshotHandler where T : unmanaged, IBufferElementData
     {
         private readonly SnapshotTypeInfo typeInfo;
-        
+
         public GenericBufferHandler(SnapshotTypeInfo typeInfo)
         {
             this.typeInfo = typeInfo;
         }
-        
+
         public unsafe void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten)
         {
             if (!em.HasBuffer<T>(entity))
@@ -727,36 +833,36 @@ namespace NoMoreEngine.Simulation.Snapshot
                 *(int*)dest = 0;
                 return;
             }
-            
+
             var buffer = em.GetBuffer<T>(entity, true);
             var ptr = (byte*)dest;
-            
+
             int elementCount = Math.Min(buffer.Length, typeInfo.maxElements);
             *(int*)ptr = elementCount;
             ptr += sizeof(int);
-            
+
             for (int i = 0; i < elementCount; i++)
             {
                 var element = buffer[i];
                 UnsafeUtility.CopyStructureToPtr(ref element, ptr);
                 ptr += typeInfo.size;
             }
-            
+
             bytesWritten = sizeof(int) + (elementCount * typeInfo.size);
         }
-        
+
         public unsafe void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src)
         {
             var ptr = (byte*)src;
             int elementCount = *(int*)ptr;
             ptr += sizeof(int);
-            
+
             if (elementCount == 0) return;
-            
+
             var buffer = em.GetBuffer<T>(entity);
             buffer.Clear();
             buffer.EnsureCapacity(elementCount);
-            
+
             for (int i = 0; i < elementCount; i++)
             {
                 var element = default(T);
@@ -765,12 +871,12 @@ namespace NoMoreEngine.Simulation.Snapshot
                 ptr += typeInfo.size;
             }
         }
-        
+
         public virtual void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap)
         {
             // Override in specialized handlers
         }
-        
+
         public bool RequiresRemapping => typeInfo.requiresRemapping;
     }
     
