@@ -2,12 +2,13 @@ using UnityEngine;
 using System;
 using System.Collections.Generic;
 using NoMoreEngine.Input;
+using NoMoreEngine.Simulation.Systems;
 
 namespace NoMoreEngine.Session
 {
     /// <summary>
     /// SessionCoordinator - Manages application flow through different states
-    /// Updated to work with the new NoMoreInput system
+    /// FIXED: Now properly handles input only on simulation ticks
     /// </summary>
     public class SessionCoordinator : MonoBehaviour
     {
@@ -25,6 +26,7 @@ namespace NoMoreEngine.Session
 
         // Core components
         private GameConfiguration gameConfig;
+        private SimulationTimeSystem timeSystem;
 
         // Events
         public event Action<SessionStateType, SessionStateType> OnStateChanged;
@@ -50,22 +52,46 @@ namespace NoMoreEngine.Session
 
         void Start()
         {
+            // Get reference to time system and subscribe to tick events
+            var world = Unity.Entities.World.DefaultGameObjectInjectionWorld;
+            if (world != null)
+            {
+                timeSystem = world.GetExistingSystemManaged<SimulationTimeSystem>();
+                if (timeSystem != null)
+                {
+                    timeSystem.OnSimulationTick += OnSimulationTick;
+                    if (debugLogging)
+                        Debug.Log("[SessionCoordinator] Subscribed to simulation ticks");
+                }
+                else
+                {
+                    Debug.LogError("[SessionCoordinator] SimulationTimeSystem not found!");
+                }
+            }
+
             // Enter starting state
             TransitionTo(startingState);
         }
 
         void Update()
         {
-            // Update current state
+            // Update current state - but NOT input handling!
+            // Only update visual/animation state that needs frame-rate updates
             if (currentState != null)
             {
-                currentState.Update(Time.deltaTime);
+                currentState.UpdateVisuals(Time.deltaTime);
                 timeInCurrentState += Time.deltaTime;
             }
         }
 
         void OnDestroy()
         {
+            // Unsubscribe from tick events
+            if (timeSystem != null)
+            {
+                timeSystem.OnSimulationTick -= OnSimulationTick;
+            }
+
             // Clean exit from current state
             currentState?.OnExit();
 
@@ -73,6 +99,18 @@ namespace NoMoreEngine.Session
             if (instance == this)
             {
                 instance = null;
+            }
+        }
+
+        /// <summary>
+        /// Called by SimulationTimeSystem at fixed timestep
+        /// This is where we handle input!
+        /// </summary>
+        private void OnSimulationTick(uint tick)
+        {
+            if (currentState != null)
+            {
+                currentState.HandleInput();
             }
         }
 
@@ -229,13 +267,14 @@ namespace NoMoreEngine.Session
     }
 
     /// <summary>
-    /// Interface for session states
+    /// Updated interface for session states
     /// </summary>
     public interface ISessionState
     {
         void Initialize(SessionContext context);
         void OnEnter();
         void OnExit();
-        void Update(float deltaTime);
+        void HandleInput(); // Called at simulation tick rate
+        void UpdateVisuals(float deltaTime); // Called at Unity frame rate (for animations, etc.)
     }
 }

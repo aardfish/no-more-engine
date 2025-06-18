@@ -440,10 +440,10 @@ MonoBehaviour:
   displayWidth: 400
   toggleKey: 9
   showTickNumber: 1
-  showMotionNumpad: 1
+  showMotionNumpad: 0
   showButtonNames: 1
   showRawValues: 0
-  activeInputColor: {r: 0, g: 1, b: 1, a: 1}
+  activeInputColor: {r: 0.1960784, g: 0.8039216, b: 0.1960784, a: 1}
   inactiveColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.5}
 --- !u!1 &237625942
 GameObject:
@@ -692,7 +692,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 883739444}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 52edec930b7221f41b0ffae65c00a99e, type: 3}
   m_Name: 
@@ -774,7 +774,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1534994480}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 93d05ea516c6c3e47add115aef7e527d, type: 3}
   m_Name: 

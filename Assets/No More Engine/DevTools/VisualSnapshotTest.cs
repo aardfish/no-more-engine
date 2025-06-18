@@ -13,7 +13,7 @@ namespace NoMoreEngine.DevTools
     /// <summary>
     /// Visual test that shows entity positions before/after snapshot restore
     /// You'll see entities "jump back" to their saved positions
-    /// Uses No More Engine's Debug drawing and input system
+    /// FIXED: Input handling now on simulation ticks only
     /// </summary>
     public class VisualSnapshotTest : MonoBehaviour
     {
@@ -55,6 +55,12 @@ namespace NoMoreEngine.DevTools
                 timeSystem = world.GetExistingSystemManaged<SimulationTimeSystem>();
                 entityManager = world.EntityManager;
                 
+                // Subscribe to tick events for input handling
+                if (timeSystem != null)
+                {
+                    timeSystem.OnSimulationTick += OnSimulationTick;
+                }
+                
                 if (runAutomatedTest)
                 {
                     StartAutomatedTest();
@@ -62,7 +68,19 @@ namespace NoMoreEngine.DevTools
             }
         }
         
-        void HandleInput()
+        void OnDestroy()
+        {
+            // Unsubscribe from tick events
+            if (timeSystem != null)
+            {
+                timeSystem.OnSimulationTick -= OnSimulationTick;
+            }
+        }
+        
+        /// <summary>
+        /// Handle input on simulation ticks only
+        /// </summary>
+        private void OnSimulationTick(uint tick)
         {
             if (snapshotSystem == null || runAutomatedTest) return;
             
@@ -82,8 +100,7 @@ namespace NoMoreEngine.DevTools
         
         void Update()
         {
-            HandleInput();
-            
+            // Handle automated test timing (no input here)
             if (runAutomatedTest && testStarted && snapshotSystem != null)
             {
                 testTimer += Time.deltaTime;
@@ -327,8 +344,8 @@ namespace NoMoreEngine.DevTools
             else
             {
                 GUILayout.Label("Manual Mode - Use buttons:");
-                GUILayout.Label($"[{GetButtonName(manualCaptureButton)}] Capture Snapshot");
-                GUILayout.Label($"[{GetButtonName(manualRestoreButton)}] Restore Snapshot");
+                GUILayout.Label($"[{manualCaptureButton.GetDisplayName()}] Capture Snapshot");
+                GUILayout.Label($"[{manualRestoreButton.GetDisplayName()}] Restore Snapshot");
             }
             
             GUI.color = Color.white;
@@ -347,22 +364,6 @@ namespace NoMoreEngine.DevTools
             
             GUILayout.EndVertical();
             GUILayout.EndArea();
-        }
-        
-        private string GetButtonName(InputButton button)
-        {
-            return button switch
-            {
-                InputButton.Action1 => "A/Space",
-                InputButton.Action2 => "B/F",
-                InputButton.Action3 => "X/E",
-                InputButton.Action4 => "Y/Q",
-                InputButton.Action5 => "LB/Shift",
-                InputButton.Action6 => "RB/C",
-                InputButton.Trigger1 => "RT/LMouse",
-                InputButton.Trigger2 => "LT/RMouse",
-                _ => button.ToString()
-            };
         }
         
         [ContextMenu("Run Test Now")]

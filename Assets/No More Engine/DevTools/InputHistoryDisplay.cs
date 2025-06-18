@@ -9,6 +9,7 @@ namespace NoMoreEngine.DevTools
     /// <summary>
     /// Fighting game style input history display
     /// Shows inputs per simulation tick with button states and directional inputs
+    /// FIXED: Toggle input now happens on simulation ticks
     /// </summary>
     public class InputHistoryDisplay : MonoBehaviour
     {
@@ -75,11 +76,15 @@ namespace NoMoreEngine.DevTools
                 Debug.Log("[InputHistoryDisplay] Connected to InputSerializer");
             }
             
-            // Get time system reference
+            // Get time system reference and subscribe to tick events
             var world = World.DefaultGameObjectInjectionWorld;
             if (world != null)
             {
                 timeSystem = world.GetExistingSystemManaged<SimulationTimeSystem>();
+                if (timeSystem != null)
+                {
+                    timeSystem.OnSimulationTick += OnSimulationTick;
+                }
             }
         }
         
@@ -89,14 +94,23 @@ namespace NoMoreEngine.DevTools
             {
                 inputSerializer.OnInputPacketsReady -= OnInputPacketsReceived;
             }
+            
+            if (timeSystem != null)
+            {
+                timeSystem.OnSimulationTick -= OnSimulationTick;
+            }
         }
         
-        void Update()
+        /// <summary>
+        /// Handle input on simulation ticks only
+        /// </summary>
+        private void OnSimulationTick(uint tick)
         {
             // Toggle display
             if (NoMoreInput.GetButtonDown(toggleKey))
             {
                 showDisplay = !showDisplay;
+                Debug.Log($"[InputHistoryDisplay] Toggled to: {showDisplay}");
             }
         }
         
@@ -133,8 +147,8 @@ namespace NoMoreEngine.DevTools
                 InitializeStyles();
             }
             
-            // Calculate position (right side of screen)
-            float x = Screen.width - displayWidth - 10;
+            // Calculate position (left side of screen)
+            float x =  displayWidth + 10;
             float y = 10;
             float height = maxHistoryLines * 25 + 60;
             
@@ -144,7 +158,7 @@ namespace NoMoreEngine.DevTools
             GUILayout.BeginArea(new Rect(x, y, displayWidth, height));
             
             // Header
-            GUILayout.Label($"INPUT HISTORY (F1 to toggle)", headerStyle);
+            GUILayout.Label($"INPUT HISTORY ({toggleKey.GetDisplayName()} to toggle)", headerStyle);
             GUILayout.Space(5);
             
             // Column headers
@@ -284,7 +298,7 @@ namespace NoMoreEngine.DevTools
         private void InitializeStyles()
         {
             boxStyle = new GUIStyle(GUI.skin.box);
-            boxStyle.normal.background = Texture2D.whiteTexture;
+            boxStyle.normal.background = Texture2D.blackTexture;
             
             headerStyle = new GUIStyle(GUI.skin.label);
             headerStyle.fontSize = 14;

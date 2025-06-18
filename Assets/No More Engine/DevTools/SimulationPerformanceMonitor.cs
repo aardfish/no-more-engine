@@ -9,6 +9,7 @@ namespace NoMoreEngine.DevTools
     /// <summary>
     /// Visual performance monitor for simulation tick times
     /// Shows network readiness and performance warnings
+    /// FIXED: Toggle input now happens on simulation ticks
     /// </summary>
     public class SimulationPerformanceMonitor : MonoBehaviour
     {
@@ -40,10 +41,27 @@ namespace NoMoreEngine.DevTools
             if (world != null)
             {
                 timeSystem = world.GetExistingSystemManaged<SimulationTimeSystem>();
+                if (timeSystem != null)
+                {
+                    // Subscribe to tick events for input handling
+                    timeSystem.OnSimulationTick += OnSimulationTick;
+                }
             }
         }
         
-        void Update()
+        void OnDestroy()
+        {
+            // Unsubscribe from tick events
+            if (timeSystem != null)
+            {
+                timeSystem.OnSimulationTick -= OnSimulationTick;
+            }
+        }
+        
+        /// <summary>
+        /// Handle input on simulation ticks only
+        /// </summary>
+        private void OnSimulationTick(uint tick)
         {
             // Process toggle request from input system
             if (NoMoreInput.Player1.GetButtonDown(toggleButton))
@@ -51,8 +69,11 @@ namespace NoMoreEngine.DevTools
                 showMonitor = !showMonitor;
                 Debug.Log($"[PerformanceMonitor] Toggled to: {showMonitor}");
             }
-            
-            // Update cached metrics periodically
+        }
+        
+        void Update()
+        {
+            // Update cached metrics periodically (visual only, not input)
             if (Time.time - lastMetricsUpdate > metricsUpdateInterval && timeSystem != null)
             {
                 lastMetrics = timeSystem.GetPerformanceMetrics();

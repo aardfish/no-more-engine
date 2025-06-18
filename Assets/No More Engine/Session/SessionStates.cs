@@ -6,8 +6,8 @@ using NoMoreEngine.Simulation.Bridge;
 namespace NoMoreEngine.Session
 {
     /// <summary>
-    /// Base class for session states with common functionality
-    /// Now uses NoMoreInput API for clean, frame-accurate input
+    /// Base class for session states with proper separation of input and visuals
+    /// Input is handled at simulation tick rate, visuals at Unity frame rate
     /// </summary>
     public abstract class SessionStateBase : ISessionState
     {
@@ -26,19 +26,18 @@ namespace NoMoreEngine.Session
 
         public virtual void OnExit()
         {
-            // Clean exit - no more callback cleanup needed!
+            // Clean exit
         }
 
-        public virtual void Update(float deltaTime)
+        // Called at simulation tick rate (60Hz)
+        public abstract void HandleInput();
+
+        // Called at Unity frame rate (for animations, interpolation, etc.)
+        public virtual void UpdateVisuals(float deltaTime)
         {
             stateTime += deltaTime;
-            
-            // Handle input in Update() using NoMoreInput
-            HandleInput();
+            // Override in derived classes if needed for visual updates
         }
-
-        // Derived classes implement this for state-specific input handling
-        protected abstract void HandleInput();
     }
 
     /// <summary>
@@ -46,7 +45,7 @@ namespace NoMoreEngine.Session
     /// </summary>
     public class MainMenuState : SessionStateBase
     {
-        protected override void HandleInput()
+        public override void HandleInput()
         {
             // Check for any player wanting to start
             if (NoMoreInput.AnyButtonDown(InputButton.Action1) || 
@@ -85,9 +84,9 @@ namespace NoMoreEngine.Session
         private float readyCountdown = -1f; // -1 = not counting down
         private const float COUNTDOWN_DURATION = 3f;
 
-        // Navigation timing
-        private float navigationCooldownTimer = 0f;
-        private const float NAVIGATION_COOLDOWN = 0.15f;
+        // Navigation repeat handling (at tick rate)
+        private int ticksSinceLastNavigation = 0;
+        private const int NAVIGATION_REPEAT_TICKS = 9; // ~150ms at 60Hz
 
         public override void OnEnter()
         {
@@ -103,34 +102,12 @@ namespace NoMoreEngine.Session
 
             // Reset state
             readyCountdown = -1f;
-            navigationCooldownTimer = 0f;
+            ticksSinceLastNavigation = 0;
             selectedStageIndex = 0;
             UpdateGameConfig();
         }
 
-        public override void Update(float deltaTime)
-        {
-            base.Update(deltaTime);
-
-            // Update navigation cooldown
-            if (navigationCooldownTimer > 0f)
-            {
-                navigationCooldownTimer -= deltaTime;
-            }
-
-            // Handle countdown
-            if (readyCountdown >= 0f)
-            {
-                readyCountdown -= deltaTime;
-
-                if (readyCountdown <= 0f)
-                {
-                    LaunchMission();
-                }
-            }
-        }
-
-        protected override void HandleInput()
+        public override void HandleInput()
         {
             var player = NoMoreInput.Player1;
 
@@ -142,22 +119,24 @@ namespace NoMoreEngine.Session
                 return;
             }
 
-            // Handle navigation with cooldown
-            if (navigationCooldownTimer <= 0f)
+            // Handle navigation with tick-based repeat prevention
+            ticksSinceLastNavigation++;
+            
+            if (ticksSinceLastNavigation >= NAVIGATION_REPEAT_TICKS)
             {
                 // Use convenience navigation properties
                 if (player.NavigateUp && selectedStageIndex > 0)
                 {
                     selectedStageIndex--;
                     UpdateGameConfig();
-                    navigationCooldownTimer = NAVIGATION_COOLDOWN;
+                    ticksSinceLastNavigation = 0;
                     Debug.Log($"[MissionLobby] Selected: {availableStages[selectedStageIndex]}");
                 }
                 else if (player.NavigateDown && selectedStageIndex < availableStages.Length - 1)
                 {
                     selectedStageIndex++;
                     UpdateGameConfig();
-                    navigationCooldownTimer = NAVIGATION_COOLDOWN;
+                    ticksSinceLastNavigation = 0;
                     Debug.Log($"[MissionLobby] Selected: {availableStages[selectedStageIndex]}");
                 }
             }
@@ -172,6 +151,22 @@ namespace NoMoreEngine.Session
             if (player.Cancel)
             {
                 context.coordinator.TransitionTo(SessionStateType.MainMenu);
+            }
+        }
+
+        public override void UpdateVisuals(float deltaTime)
+        {
+            base.UpdateVisuals(deltaTime);
+
+            // Update countdown timer
+            if (readyCountdown >= 0f)
+            {
+                readyCountdown -= deltaTime;
+
+                if (readyCountdown <= 0f)
+                {
+                    LaunchMission();
+                }
             }
         }
 
@@ -274,7 +269,7 @@ namespace NoMoreEngine.Session
             base.OnExit();
         }
 
-        protected override void HandleInput()
+        public override void HandleInput()
         {
             // Check all players for pause menu
             if (NoMoreInput.AnyButtonDown(InputButton.Menu1))
@@ -372,7 +367,7 @@ namespace NoMoreEngine.Session
             }
         }
 
-        protected override void HandleInput()
+        public override void HandleInput()
         {
             // Wait a minimum time before allowing exit
             if (stateTime < minDisplayTime) return;
@@ -434,11 +429,6 @@ namespace NoMoreEngine.Session
     {
         private SessionStateType previousState;
 
-        public override void Initialize(SessionContext context)
-        {
-            base.Initialize(context);
-        }
-
         public void SetPreviousState(SessionStateType state)
         {
             previousState = state;
@@ -463,7 +453,7 @@ namespace NoMoreEngine.Session
             simControl?.ResumeSimulation();
         }
 
-        protected override void HandleInput()
+        public override void HandleInput()
         {
             var player = NoMoreInput.Player1;
 
@@ -498,8 +488,8 @@ namespace NoMoreEngine.Session
     /// </summary>
     public class VersusLobbyState : SessionStateBase
     {
-        private float[] playerJoinTimers = new float[4];
-        private const float JOIN_COOLDOWN = 0.5f;
+        private int[] playerJoinTickTimers = new int[4];
+        private const int JOIN_COOLDOWN_TICKS = 30; // 0.5s at 60Hz
 
         public override void OnEnter()
         {
@@ -509,31 +499,26 @@ namespace NoMoreEngine.Session
             // Reset timers
             for (int i = 0; i < 4; i++)
             {
-                playerJoinTimers[i] = 0f;
+                playerJoinTickTimers[i] = 0;
             }
         }
 
-        public override void Update(float deltaTime)
+        public override void HandleInput()
         {
-            base.Update(deltaTime);
-            
-            // Update cooldown timers
+            // Increment cooldown timers
             for (int i = 0; i < 4; i++)
             {
-                if (playerJoinTimers[i] > 0f)
-                    playerJoinTimers[i] -= deltaTime;
+                if (playerJoinTickTimers[i] > 0)
+                    playerJoinTickTimers[i]--;
             }
-        }
 
-        protected override void HandleInput()
-        {
             // Check each player for join/leave
             for (byte i = 0; i < 4; i++)
             {
                 var player = NoMoreInput.GetPlayer(i);
                 var slot = context.gameConfig.playerSlots[i];
                 
-                if (playerJoinTimers[i] <= 0f)
+                if (playerJoinTickTimers[i] == 0)
                 {
                     if (slot.IsEmpty)
                     {
@@ -541,7 +526,7 @@ namespace NoMoreEngine.Session
                         if (player.GetButtonDown(InputButton.Action1))
                         {
                             JoinPlayer(i);
-                            playerJoinTimers[i] = JOIN_COOLDOWN;
+                            playerJoinTickTimers[i] = JOIN_COOLDOWN_TICKS;
                         }
                     }
                     else if (slot.IsLocal)
@@ -550,14 +535,14 @@ namespace NoMoreEngine.Session
                         if (player.GetButtonDown(InputButton.Action2))
                         {
                             LeavePlayer(i);
-                            playerJoinTimers[i] = JOIN_COOLDOWN;
+                            playerJoinTickTimers[i] = JOIN_COOLDOWN_TICKS;
                         }
                         
                         // Toggle ready with Action1
                         if (player.GetButtonDown(InputButton.Action1))
                         {
                             ToggleReady(i);
-                            playerJoinTimers[i] = JOIN_COOLDOWN;
+                            playerJoinTickTimers[i] = JOIN_COOLDOWN_TICKS;
                         }
                     }
                 }
