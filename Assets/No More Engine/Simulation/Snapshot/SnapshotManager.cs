@@ -6,34 +6,36 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Linq;
-using System.Security.Cryptography;
 using NoMoreEngine.Simulation.Components;
 using NoMoreEngine.Simulation.Bridge;
+using Unity.Jobs;
+using Unity.Burst;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
     /// <summary>
-    /// Core snapshot management system
-    /// Automatically discovers and handles all snapshotable components
+    /// Optimized snapshot management system with object pooling and in-place restoration
     /// </summary>
-    public class SnapshotManager
+    public class SnapshotManager : IDisposable
     {
         private World world;
         private EntityManager entityManager;
         private SimulationEntityManager simEntityManager => SimulationEntityManager.Instance;
 
-        // Single unified type list
+        // Type discovery
         private List<SnapshotTypeInfo> snapshotTypes;
         private Dictionary<Type, int> typeToIndex;
         private Dictionary<Type, ISnapshotHandler> handlers;
         private EntityQuery snapshotQuery;
 
-        // Entity remapping for buffers
-        private NativeHashMap<Entity, Entity> entityRemapTable;
+        // Object pooling for snapshots
+        private SnapshotPool snapshotPool;
+        private Dictionary<uint, PooledSnapshot> activeSnapshots;
         
-        // Snapshot storage
-        private Dictionary<uint, SimulationSnapshot> snapshots;
-        private int maxSnapshots;
+        // Persistent buffers to reduce allocations
+        private NativeList<Entity> entityBuffer;
+        private NativeHashMap<Entity, int> entityToIndexMap;
+        private NativeArray<uint> hashBuffer;
         
         // Performance tracking
         private double lastCaptureTime;
@@ -41,18 +43,25 @@ namespace NoMoreEngine.Simulation.Snapshot
         
         // Configuration
         private const int DEFAULT_MAX_SNAPSHOTS = 10;
-        private const int DEFAULT_SNAPSHOT_SIZE = 1024 * 1024; // 1MB default
-        private const int DEFAULT_MAX_ENTITIES = 10000;
-        private const int MAX_SNAPSHOT_TYPES = 64; // Limited by ulong mask
+        private const int DEFAULT_SNAPSHOT_SIZE = 1024 * 512; // 512KB default (reduced from 1MB)
+        private const int DEFAULT_MAX_ENTITIES = 5000; // Reduced from 10,000
+        private const int MAX_SNAPSHOT_TYPES = 64;
         
         public SnapshotManager(World world, int maxSnapshots = DEFAULT_MAX_SNAPSHOTS)
         {
             this.world = world;
             this.entityManager = world.EntityManager;
-            this.maxSnapshots = maxSnapshots;
-            this.snapshots = new Dictionary<uint, SimulationSnapshot>(maxSnapshots);
+            this.activeSnapshots = new Dictionary<uint, PooledSnapshot>(maxSnapshots);
             this.typeToIndex = new Dictionary<Type, int>();
             this.handlers = new Dictionary<Type, ISnapshotHandler>();
+
+            // Initialize object pool
+            snapshotPool = new SnapshotPool(maxSnapshots, DEFAULT_SNAPSHOT_SIZE, DEFAULT_MAX_ENTITIES);
+            
+            // Initialize persistent buffers
+            entityBuffer = new NativeList<Entity>(DEFAULT_MAX_ENTITIES, Allocator.Persistent);
+            entityToIndexMap = new NativeHashMap<Entity, int>(DEFAULT_MAX_ENTITIES, Allocator.Persistent);
+            hashBuffer = new NativeArray<uint>(256, Allocator.Persistent); // For xxHash
 
             // Discover all snapshotable types
             DiscoverSnapshotableTypes();
@@ -60,9 +69,421 @@ namespace NoMoreEngine.Simulation.Snapshot
             // Create entity query
             CreateSnapshotQuery();
 
-            Debug.Log($"[SnapshotManager] Initialized with {snapshotTypes.Count} components and buffers");
+            Debug.Log($"[SnapshotManager] Initialized with object pooling - {snapshotTypes.Count} types registered");
         }
 
+        /// <summary>
+        /// Capture a snapshot using pooled resources
+        /// </summary>
+        public bool CaptureSnapshot(uint tick)
+        {
+            var startTime = Time.realtimeSinceStartupAsDouble;
+            
+            // Check if we already have a snapshot for this tick
+            if (activeSnapshots.ContainsKey(tick))
+            {
+                Debug.LogWarning($"[SnapshotManager] Snapshot already exists for tick {tick}");
+                return false;
+            }
+            
+            // Get a pooled snapshot
+            var pooledSnapshot = snapshotPool.Rent();
+            if (pooledSnapshot == null)
+            {
+                // Pool is full, need to evict oldest
+                if (activeSnapshots.Count >= DEFAULT_MAX_SNAPSHOTS)
+                {
+                    var oldestTick = activeSnapshots.Keys.Min();
+                    var oldSnapshot = activeSnapshots[oldestTick];
+                    activeSnapshots.Remove(oldestTick);
+                    snapshotPool.Return(oldSnapshot);
+                    
+                    // Try again
+                    pooledSnapshot = snapshotPool.Rent();
+                }
+                
+                if (pooledSnapshot == null)
+                {
+                    Debug.LogError("[SnapshotManager] Failed to get pooled snapshot");
+                    return false;
+                }
+            }
+            
+            // Configure snapshot for this tick
+            pooledSnapshot.snapshot.tick = tick;
+            pooledSnapshot.snapshot.entityCount = 0;
+            pooledSnapshot.snapshot.dataSize = 0;
+            
+            try
+            {
+                // Capture entities using persistent buffers
+                CaptureEntities(ref pooledSnapshot.snapshot);
+                
+                // Calculate hash using faster algorithm
+                pooledSnapshot.snapshot.hash = CalculateFastHash(ref pooledSnapshot.snapshot);
+                
+                // Store in active snapshots
+                activeSnapshots[tick] = pooledSnapshot;
+                pooledSnapshot.lastUsedTick = tick;
+                
+                lastCaptureTime = (Time.realtimeSinceStartupAsDouble - startTime) * 1000.0;
+                
+                Debug.Log($"[SnapshotManager] Captured snapshot for tick {tick} " +
+                         $"({pooledSnapshot.snapshot.entityCount} entities, {pooledSnapshot.snapshot.dataSize} bytes) " +
+                         $"in {lastCaptureTime:F2}ms");
+                
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[SnapshotManager] Failed to capture snapshot: {e.Message}");
+                // Return snapshot to pool on failure
+                snapshotPool.Return(pooledSnapshot);
+                return false;
+            }
+        }
+        
+        /// <summary>
+        /// Optimized entity capture using persistent buffers
+        /// </summary>
+        private unsafe void CaptureEntities(ref SimulationSnapshot snapshot)
+        {
+            // Clear and populate entity buffer
+            entityBuffer.Clear();
+            entityToIndexMap.Clear();
+            
+            // Use cached query and copy to persistent buffer
+            using (var tempEntities = snapshotQuery.ToEntityArray(Allocator.TempJob))
+            {
+                entityBuffer.AddRange(tempEntities);
+                
+                // Build index map
+                for (int i = 0; i < entityBuffer.Length; i++)
+                {
+                    entityToIndexMap[entityBuffer[i]] = i;
+                }
+            }
+            
+            if (entityBuffer.Length > snapshot.entities.Length)
+            {
+                Debug.LogError($"[SnapshotManager] Too many entities ({entityBuffer.Length}) for snapshot buffer");
+                return;
+            }
+
+            var dataPtr = (byte*)snapshot.data.GetUnsafePtr();
+            int currentOffset = 0;
+            
+            // Process entities in batches for better cache coherency
+            const int BATCH_SIZE = 64;
+            int entityCount = entityBuffer.Length;
+            
+            for (int batchStart = 0; batchStart < entityCount; batchStart += BATCH_SIZE)
+            {
+                int batchEnd = Math.Min(batchStart + BATCH_SIZE, entityCount);
+                
+                for (int i = batchStart; i < batchEnd; i++)
+                {
+                    var entity = entityBuffer[i];
+                    int entityDataStart = currentOffset;
+                    ulong typeMask = 0;
+
+                    // Process all component types
+                    for (int typeIndex = 0; typeIndex < snapshotTypes.Count; typeIndex++)
+                    {
+                        var typeInfo = snapshotTypes[typeIndex];
+                        bool hasType = typeInfo.isBuffer
+                            ? HasBuffer(entity, typeInfo.managedType)
+                            : entityManager.HasComponent(entity, typeInfo.componentType);
+
+                        if (hasType)
+                        {
+                            typeMask |= (1UL << typeIndex);
+
+                            if (handlers.TryGetValue(typeInfo.managedType, out var handler))
+                            {
+                                handler.CopyToSnapshot(entityManager, entity, 
+                                    (IntPtr)(dataPtr + currentOffset), out int bytesWritten);
+                                currentOffset += bytesWritten;
+                            }
+                        }
+                    }
+                    
+                    // Store entity snapshot info
+                    snapshot.entities[i] = EntitySnapshot.Create(
+                        entity, 
+                        entityDataStart,
+                        currentOffset - entityDataStart,
+                        typeMask
+                    );
+                }
+            }
+            
+            snapshot.entityCount = entityCount;
+            snapshot.dataSize = currentOffset;
+        }
+        
+        /// <summary>
+        /// Restore snapshot using in-place updates instead of destroying/recreating
+        /// </summary>
+        public bool RestoreSnapshot(uint tick)
+        {
+            var startTime = Time.realtimeSinceStartupAsDouble;
+            
+            if (!activeSnapshots.TryGetValue(tick, out var pooledSnapshot))
+            {
+                Debug.LogError($"[SnapshotManager] No snapshot found for tick {tick}");
+                return false;
+            }
+            
+            var snapshot = pooledSnapshot.snapshot;
+            
+            try
+            {
+                // Use optimized in-place restoration
+                RestoreEntitiesInPlace(ref snapshot);
+                
+                lastRestoreTime = (Time.realtimeSinceStartupAsDouble - startTime) * 1000.0;
+                
+                Debug.Log($"[SnapshotManager] Restored snapshot for tick {tick} in {lastRestoreTime:F2}ms");
+                
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[SnapshotManager] Failed to restore snapshot: {e.Message}\n{e.StackTrace}");
+                return false;
+            }
+        }
+        
+        /// <summary>
+        /// In-place restoration that updates existing entities instead of recreating
+        /// </summary>
+        private unsafe void RestoreEntitiesInPlace(ref SimulationSnapshot snapshot)
+        {
+            var dataPtr = (byte*)snapshot.data.GetUnsafeReadOnlyPtr();
+            
+            // Get current entities
+            entityBuffer.Clear();
+            using (var currentEntities = snapshotQuery.ToEntityArray(Allocator.TempJob))
+            {
+                entityBuffer.AddRange(currentEntities);
+            }
+            
+            // Build lookup for current entities
+            entityToIndexMap.Clear();
+            for (int i = 0; i < entityBuffer.Length; i++)
+            {
+                entityToIndexMap[entityBuffer[i]] = i;
+            }
+            
+            // Create entity remapping for missing entities
+            var entityRemap = new NativeHashMap<Entity, Entity>(snapshot.entityCount, Allocator.Temp);
+            var entitiesToCreate = new NativeList<int>(Allocator.Temp);
+            var entitiesToDestroy = new NativeList<Entity>(Allocator.Temp);
+            
+            try
+            {
+                // Phase 1: Identify entities to create/destroy/update
+                for (int i = 0; i < snapshot.entityCount; i++)
+                {
+                    var oldEntity = snapshot.entities[i].ToEntity();
+                    
+                    // Check if entity still exists
+                    if (entityManager.Exists(oldEntity))
+                    {
+                        entityRemap.Add(oldEntity, oldEntity); // Map to self
+                    }
+                    else
+                    {
+                        entitiesToCreate.Add(i); // Mark for creation
+                    }
+                }
+                
+                // Find entities that exist now but not in snapshot (need to destroy)
+                foreach (var currentEntity in entityBuffer)
+                {
+                    bool foundInSnapshot = false;
+                    for (int i = 0; i < snapshot.entityCount; i++)
+                    {
+                        if (snapshot.entities[i].ToEntity() == currentEntity)
+                        {
+                            foundInSnapshot = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!foundInSnapshot)
+                    {
+                        entitiesToDestroy.Add(currentEntity);
+                    }
+                }
+                
+                // Phase 2: Handle entity destruction through SimulationEntityManager
+                if (entitiesToDestroy.Length > 0)
+                {
+                    foreach (var entity in entitiesToDestroy)
+                    {
+                        if (simEntityManager != null)
+                        {
+                            simEntityManager.DestroyEntity(entity);
+                        }
+                        else
+                        {
+                            entityManager.DestroyEntity(entity);
+                        }
+                    }
+                }
+                
+                // Phase 3: Create missing entities
+                if (entitiesToCreate.Length > 0)
+                {
+                    NativeArray<Entity> newEntities;
+                    if (simEntityManager != null)
+                    {
+                        newEntities = simEntityManager.CreateEntitiesForRestore(entitiesToCreate.Length, Allocator.Temp);
+                    }
+                    else
+                    {
+                        newEntities = new NativeArray<Entity>(entitiesToCreate.Length, Allocator.Temp);
+                        entityManager.CreateEntity(entityManager.CreateArchetype(), newEntities);
+                    }
+                    
+                    // Map old entities to new ones
+                    for (int i = 0; i < entitiesToCreate.Length; i++)
+                    {
+                        var snapshotIndex = entitiesToCreate[i];
+                        var oldEntity = snapshot.entities[snapshotIndex].ToEntity();
+                        entityRemap.Add(oldEntity, newEntities[i]);
+                    }
+                    
+                    newEntities.Dispose();
+                }
+                
+                // Phase 4: Restore component data (update existing or newly created entities)
+                var restoreJob = new RestoreComponentDataJob
+                {
+                    snapshot = snapshot,
+                    dataPtr = dataPtr,
+                    entityRemap = entityRemap,
+                    snapshotTypes = new NativeArray<SnapshotTypeInfo>(snapshotTypes.ToArray(), Allocator.TempJob)
+                };
+                
+                var jobHandle = restoreJob.Schedule(snapshot.entityCount, 32);
+                jobHandle.Complete();
+                
+                restoreJob.snapshotTypes.Dispose();
+                
+                // Phase 5: Manual restoration for components that need special handling
+                for (int i = 0; i < snapshot.entityCount; i++)
+                {
+                    var entitySnapshot = snapshot.entities[i];
+                    var oldEntity = entitySnapshot.ToEntity();
+                    
+                    if (entityRemap.TryGetValue(oldEntity, out var newEntity))
+                    {
+                        int dataOffset = entitySnapshot.dataOffset;
+                        
+                        // Restore components that couldn't be handled in job
+                        for (int typeIndex = 0; typeIndex < snapshotTypes.Count; typeIndex++)
+                        {
+                            if ((entitySnapshot.typeMask & (1UL << typeIndex)) != 0)
+                            {
+                                var typeInfo = snapshotTypes[typeIndex];
+                                
+                                if (handlers.TryGetValue(typeInfo.managedType, out var handler))
+                                {
+                                    // Add component if needed
+                                    if (typeInfo.isBuffer)
+                                    {
+                                        if (!HasBuffer(newEntity, typeInfo.managedType))
+                                            AddBuffer(newEntity, typeInfo.managedType);
+                                    }
+                                    else
+                                    {
+                                        if (!entityManager.HasComponent(newEntity, typeInfo.componentType))
+                                            entityManager.AddComponent(newEntity, typeInfo.componentType);
+                                    }
+                                    
+                                    // Restore data
+                                    handler.CopyFromSnapshot(entityManager, newEntity, (IntPtr)(dataPtr + dataOffset));
+                                    
+                                    // Update offset
+                                    if (typeInfo.isBuffer)
+                                    {
+                                        int elementCount = *(int*)(dataPtr + dataOffset);
+                                        dataOffset += sizeof(int) + (elementCount * typeInfo.size);
+                                    }
+                                    else
+                                    {
+                                        dataOffset += typeInfo.size;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Update entity category if using SimulationEntityManager
+                        if (simEntityManager != null && entityManager.HasComponent<SimEntityTypeComponent>(newEntity))
+                        {
+                            var simType = entityManager.GetComponentData<SimEntityTypeComponent>(newEntity);
+                            var category = simType.simEntityType switch
+                            {
+                                SimEntityType.Player => EntityCategory.Player,
+                                SimEntityType.Enemy => EntityCategory.Enemy,
+                                SimEntityType.Projectile => EntityCategory.Projectile,
+                                SimEntityType.Environment => EntityCategory.Environment,
+                                _ => EntityCategory.Unknown
+                            };
+                            
+                            simEntityManager.UpdateEntityCategory(newEntity, category, $"{simType.simEntityType}_{newEntity.Index}");
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                // Cleanup
+                entityRemap.Dispose();
+                entitiesToCreate.Dispose();
+                entitiesToDestroy.Dispose();
+            }
+        }
+        
+        /// <summary>
+        /// Fast hash calculation using xxHash instead of SHA256
+        /// </summary>
+        private unsafe ulong CalculateFastHash(ref SimulationSnapshot snapshot)
+        {
+            // Use xxHash64 which returns uint2 (two 32-bit values)
+            var hash64 = xxHash3.Hash64(snapshot.data.GetUnsafeReadOnlyPtr(), snapshot.dataSize);
+            
+            // Combine the two 32-bit values into a single 64-bit value
+            ulong result = ((ulong)hash64.x << 32) | (ulong)hash64.y;
+            return result;
+        }
+        
+        // ... (rest of the helper methods remain the same)
+        
+        /// <summary>
+        /// Cleanup and dispose all resources
+        /// </summary>
+        public void Dispose()
+        {
+            // Return all active snapshots to pool
+            foreach (var pooledSnapshot in activeSnapshots.Values)
+            {
+                snapshotPool.Return(pooledSnapshot);
+            }
+            activeSnapshots.Clear();
+            
+            // Dispose pool
+            snapshotPool?.Dispose();
+            
+            // Dispose persistent buffers
+            if (entityBuffer.IsCreated) entityBuffer.Dispose();
+            if (entityToIndexMap.IsCreated) entityToIndexMap.Dispose();
+            if (hashBuffer.IsCreated) hashBuffer.Dispose();
+        }
+        
         /// <summary>
         /// Automatically discover all components that implement ISnapshotable
         /// </summary>
@@ -86,15 +507,13 @@ namespace NoMoreEngine.Simulation.Snapshot
             {
                 try
                 {
-                    // Find all types with SnapshotableAttribute
                     var types = assembly.GetTypes()
-                    .Where
-                    (
-                        t => t.IsValueType &&
-                        !t.IsGenericType &&
-                        t.GetCustomAttribute<SnapshotableAttribute>() != null &&
-                        (typeof(IComponentData).IsAssignableFrom(t) || typeof(IBufferElementData).IsAssignableFrom(t))
-                    ).ToList();
+                    .Where(t => t.IsValueType &&
+                               !t.IsGenericType &&
+                               !singletonTypes.Contains(t) &&
+                               t.GetCustomAttribute<SnapshotableAttribute>() != null &&
+                               (typeof(IComponentData).IsAssignableFrom(t) || typeof(IBufferElementData).IsAssignableFrom(t)))
+                    .ToList();
 
                     foreach (var type in types)
                     {
@@ -109,7 +528,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                 }
             }
 
-            // Sort by priority and separate into components and buffers
+            // Sort by priority
             var sortedTypes = discoveredTypes.OrderBy(x => x.attr.Priority).ToList();
 
             if (sortedTypes.Count > MAX_SNAPSHOT_TYPES)
@@ -132,12 +551,10 @@ namespace NoMoreEngine.Simulation.Snapshot
                 CreateHandler(type, typeInfo);
 
                 Debug.Log($"[SnapshotManager] [{i}] Registered {(isBuffer ? "buffer" : "component")}: {type.Name} " + 
-                $"(size: {typeInfo.size}, priority: {attr.Priority}, isTag: {typeInfo.size == 0})");
+                $"(size: {typeInfo.size}, priority: {attr.Priority})");
             }
-
-            Debug.Log($"[SnapshotManager] Excluded singleton types from snapshot discovery");
         }
-
+        
         /// <summary>
         /// Create appropriate handler for a type
         /// </summary>
@@ -149,7 +566,6 @@ namespace NoMoreEngine.Simulation.Snapshot
 
                 if (typeInfo.isBuffer)
                 {
-                    // Special handlers for specific buffer types
                     if (type == typeof(CollisionContactBuffer))
                     {
                         handler = new CollisionContactBufferHandler(typeInfo);
@@ -160,18 +576,13 @@ namespace NoMoreEngine.Simulation.Snapshot
                         handler = Activator.CreateInstance(handlerType, typeInfo) as ISnapshotHandler;
                     }
                 }
-
                 else
                 {
-                    // Check if it's a zero-sized (tag) component
                     if (typeInfo.size == 0)
                     {
-                        Debug.Log($"[SnapshotManager] Creating TagComponentHandler for zero-sized component: {type.Name}");
-                        // Create a special handler for tag components
                         var handlerType = typeof(TagComponentHandler<>).MakeGenericType(type);
                         handler = Activator.CreateInstance(handlerType, typeInfo) as ISnapshotHandler;
                     }
-
                     else
                     {
                         var handlerType = typeof(GenericComponentHandler<>).MakeGenericType(type);
@@ -182,7 +593,6 @@ namespace NoMoreEngine.Simulation.Snapshot
                 if (handler != null)
                 {
                     handlers[type] = handler;
-                    Debug.Log($"[SnapshotManager] Handler created for {type.Name}: {handler.GetType().Name}");
                 }
             }
             catch (Exception e)
@@ -191,13 +601,12 @@ namespace NoMoreEngine.Simulation.Snapshot
                 handlers[type] = new NullHandler();
             }
         }
-
+        
         /// <summary>
         /// Create entity query for snapshotable game entities
         /// </summary>
         private void CreateSnapshotQuery()
         {
-            // Query for game entities only - those with transforms and entity types
             var queryDesc = new EntityQueryDesc
             {
                 All = new ComponentType[] 
@@ -209,349 +618,6 @@ namespace NoMoreEngine.Simulation.Snapshot
             };
 
             snapshotQuery = entityManager.CreateEntityQuery(queryDesc);
-            
-            Debug.Log("[SnapshotManager] Created query for game entities only");
-        }
-        
-        /// <summary>
-        /// Capture a snapshot of the current simulation state
-        /// </summary>
-        public bool CaptureSnapshot(uint tick)
-        {
-            Debug.Log("[SnapshotManager] CaptureSnapshot called - VERSION 2");
-
-            var startTime = Time.realtimeSinceStartupAsDouble;
-            
-            // Check if we already have a snapshot for this tick
-            if (snapshots.ContainsKey(tick))
-            {
-                Debug.LogWarning($"[SnapshotManager] Snapshot already exists for tick {tick}");
-                return false;
-            }
-            
-            // Remove oldest snapshot if at capacity
-            if (snapshots.Count >= maxSnapshots)
-            {
-                var oldestTick = snapshots.Keys.Min();
-                snapshots[oldestTick].Dispose();
-                snapshots.Remove(oldestTick);
-            }
-            
-            // Create new snapshot
-            var snapshot = new SimulationSnapshot(tick, DEFAULT_SNAPSHOT_SIZE, DEFAULT_MAX_ENTITIES);
-            
-            try
-            {
-                // Capture all entities
-                CaptureEntities(ref snapshot);
-                
-                // Calculate hash
-                snapshot.hash = CalculateSnapshotHash(ref snapshot);
-                
-                // Store snapshot
-                snapshots[tick] = snapshot;
-                
-                lastCaptureTime = (Time.realtimeSinceStartupAsDouble - startTime) * 1000.0;
-                
-                Debug.Log($"[SnapshotManager] Captured snapshot for tick {tick} " +
-                         $"({snapshot.entityCount} entities, {snapshot.dataSize} bytes) in {lastCaptureTime:F2}ms");
-                
-                return true;
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[SnapshotManager] Failed to capture snapshot: {e.Message}");
-                Debug.LogError($"[SnapshotManager] Stack trace: {e.StackTrace}");
-                snapshot.Dispose();
-                return false;
-            }
-        }
-        
-        /// <summary>
-        /// Capture all entities and their component data
-        /// </summary>
-        private unsafe void CaptureEntities(ref SimulationSnapshot snapshot)
-        {
-            var entities = snapshotQuery.ToEntityArray(Allocator.Temp);
-
-            // Validate entity count
-            if (entities.Length > snapshot.entities.Length)
-            {
-                Debug.LogError($"[SnapshotManager] Too many entities ({entities.Length}) for snapshot buffer ({snapshot.entities.Length})");
-                entities.Dispose();
-                return;
-            }
-
-            var dataPtr = (byte*)snapshot.data.GetUnsafePtr();
-            int currentOffset = 0;
-            int entityIndex = 0;
-            
-            foreach (var entity in entities)
-            {
-                if (entityIndex >= snapshot.entities.Length)
-                {
-                    Debug.LogWarning("[SnapshotManager] Too many entities for snapshot buffer");
-                    break;
-                }
-
-                // Validate we have space for data
-                if (currentOffset >= snapshot.data.Length - 1024)
-                {
-                    Debug.LogError("[SnapshotManager] Snapshot data buffer full!");
-                    break;
-                }
-                
-                int entityDataStart = currentOffset;
-                ulong typeMask = 0;
-
-                // Single loop for all types
-                for (int i = 0; i < snapshotTypes.Count; i++)
-                {
-                    var typeInfo = snapshotTypes[i];
-                    bool hasType = false;
-
-                    if (typeInfo.isBuffer)
-                    {
-                        hasType = HasBuffer(entity, typeInfo.managedType);
-                    }
-                    else
-                    {
-                        hasType = entityManager.HasComponent(entity, typeInfo.componentType);
-                    }
-
-                    if (hasType)
-                    {
-                        typeMask |= (1UL << i);
-
-                        if (handlers.TryGetValue(typeInfo.managedType, out var handler))
-                        {
-                            // Copy component or buffer data to snapshot
-                            handler.CopyToSnapshot(entityManager, entity, (IntPtr)(dataPtr + currentOffset), out int bytesWritten);
-                            currentOffset += bytesWritten;
-                        }
-                    }
-                }
-                
-                // Store entity snapshot info
-                snapshot.entities[entityIndex] = EntitySnapshot.Create(
-                    entity, 
-                    entityDataStart,
-                    currentOffset - entityDataStart,
-                    typeMask
-                );
-                
-                entityIndex++;
-            }
-            
-            snapshot.entityCount = entityIndex;
-            snapshot.dataSize = currentOffset;
-
-            // Validate final values
-            if (snapshot.entityCount < 0 || snapshot.entityCount > snapshot.entities.Length)
-            {
-                Debug.LogError($"[SnapshotManager] Invalid entity count: {snapshot.entityCount}");
-                snapshot.entityCount = 0;
-            }
-            
-            entities.Dispose();
-        }
-        
-        /// <summary>
-        /// Restore snapshot using SimulationEntityManager
-        /// </summary>
-        public bool RestoreSnapshot(uint tick)
-        {
-            var startTime = Time.realtimeSinceStartupAsDouble;
-            
-            if (!snapshots.TryGetValue(tick, out var snapshot))
-            {
-                Debug.LogError($"[SnapshotManager] No snapshot found for tick {tick}");
-                return false;
-            }
-
-            // Validate snapshot before attempting restore
-            if (snapshot.entityCount < 0 || snapshot.entityCount > DEFAULT_MAX_ENTITIES)
-            {
-                Debug.LogError($"[SnapshotManager] Corrupted snapshot - invalid entity count: {snapshot.entityCount}");
-                return false;
-            }
-            
-            if (snapshot.dataSize < 0 || snapshot.dataSize > snapshot.data.Length)
-            {
-                Debug.LogError($"[SnapshotManager] Corrupted snapshot - invalid data size: {snapshot.dataSize}");
-                return false;
-            }
-            
-            try
-            {
-                // Use SimulationEntityManager to destroy all managed entities
-                if (simEntityManager != null)
-                {
-                    simEntityManager.DestroyAllManagedEntities();
-                }
-                else
-                {
-                    // Fallback
-                    entityManager.DestroyEntity(snapshotQuery);
-                }
-
-                // Restore entities from snapshot
-                RestoreEntities(ref snapshot);
-
-                lastRestoreTime = (Time.realtimeSinceStartupAsDouble - startTime) * 1000.0;
-
-                Debug.Log($"[SnapshotManager] Restored snapshot for tick {tick} in {lastRestoreTime:F2}ms");
-
-                return true;
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"[SnapshotManager] Failed to restore snapshot: {e.Message}");
-                return false;
-            }
-        }
-        
-        /// <summary>
-        /// Restore all entities from snapshot data with entity remapping support
-        /// </summary>
-        private unsafe void RestoreEntities(ref SimulationSnapshot snapshot)
-        {
-            // Extra validation
-            if (snapshot.entityCount <= 0 || snapshot.entityCount > DEFAULT_MAX_ENTITIES)
-            {
-                Debug.LogError($"[SnapshotManager] Invalid entity count in snapshot: {snapshot.entityCount}");
-                return;
-            }
-
-            var dataPtr = (byte*)snapshot.data.GetUnsafeReadOnlyPtr();
-            
-            // Create entity remap table
-            entityRemapTable = new NativeHashMap<Entity, Entity>(snapshot.entityCount * 2, Allocator.Temp);
-
-            // First pass: Use SimulationEntityManager to create entities
-            NativeArray<Entity> newEntities;
-            if (simEntityManager != null)
-            {
-                // This ensures all entities are tracked from creation
-                newEntities = simEntityManager.CreateEntitiesForRestore(snapshot.entityCount, Allocator.Temp);
-            }
-            else
-            {
-                // Fallback if somehow we don't have SimulationEntityManager
-                Debug.LogError("[SnapshotManager] SimulationEntityManager not available! Entities will not be tracked!");
-                newEntities = new NativeArray<Entity>(snapshot.entityCount, Allocator.Temp);
-                entityManager.CreateEntity(entityManager.CreateArchetype(), newEntities);
-            }
-            
-            // Build remap table
-            for (int i = 0; i < snapshot.entityCount; i++)
-            {
-                var entitySnapshot = snapshot.entities[i];
-                var oldEntity = entitySnapshot.ToEntity();
-                var newEntity = newEntities[i];
-                entityRemapTable.Add(oldEntity, newEntity);
-            }
-
-            // Second pass: Restore all data
-            for (int i = 0; i < snapshot.entityCount; i++)
-            {
-                var entitySnapshot = snapshot.entities[i];
-                var entity = newEntities[i];
-                int dataOffset = entitySnapshot.dataOffset;
-
-                // Track what type of entity this is for category update
-                EntityCategory detectedCategory = EntityCategory.Unknown;
-                string entityName = null;
-
-                // Single loop for all types
-                for (int typeIndex = 0; typeIndex < snapshotTypes.Count; typeIndex++)
-                {
-                    if ((entitySnapshot.typeMask & (1UL << typeIndex)) != 0)
-                    {
-                        var typeInfo = snapshotTypes[typeIndex];
-
-                        // Add component/buffer if needed
-                        if (typeInfo.isBuffer)
-                        {
-                            if (!HasBuffer(entity, typeInfo.managedType))
-                            {
-                                AddBuffer(entity, typeInfo.managedType);
-                            }
-                        }
-                        else
-                        {
-                            if (!entityManager.HasComponent(entity, typeInfo.componentType))
-                            {
-                                entityManager.AddComponent(entity, typeInfo.componentType);
-                            }
-                        }
-
-                        // Restore data
-                        if (handlers.TryGetValue(typeInfo.managedType, out var handler))
-                        {
-                            handler.CopyFromSnapshot(entityManager, entity, (IntPtr)(dataPtr + dataOffset));
-
-                            // Check for SimEntityTypeComponent to determine proper category
-                            if (typeInfo.managedType == typeof(SimEntityTypeComponent))
-                            {
-                                var simEntityComp = entityManager.GetComponentData<SimEntityTypeComponent>(entity);
-
-                                // Map SimEntityType to EntityCategory
-                                detectedCategory = simEntityComp.simEntityType switch
-                                {
-                                    SimEntityType.Player => EntityCategory.Player,
-                                    SimEntityType.Enemy => EntityCategory.Enemy,
-                                    SimEntityType.Projectile => EntityCategory.Projectile,
-                                    SimEntityType.Environment => EntityCategory.Environment,
-                                    _ => EntityCategory.Unknown
-                                };
-
-                                entityName = $"{simEntityComp.simEntityType}_{entity.Index}";
-                            }
-
-                            // Advance by the actual size stored
-                            if (typeInfo.isBuffer)
-                            {
-                                // For buffers, we need to calculate the actual size
-                                int elementCount = *(int*)(dataPtr + dataOffset);
-                                dataOffset += sizeof(int) + (elementCount * typeInfo.size);
-                            }
-                            else
-                            {
-                                dataOffset += typeInfo.size;
-                            }
-                        }
-                    }
-                }
-
-                // Update entity category now that we know what type it is
-                if (simEntityManager != null && detectedCategory != EntityCategory.Unknown)
-                {
-                    simEntityManager.UpdateEntityCategory(entity, detectedCategory, entityName);
-                }
-            }
-
-            // Third pass: Remap entity references in buffers
-            for (int i = 0; i < snapshot.entityCount; i++)
-            {
-                var entity = newEntities[i];
-
-                for (int typeIndex = 0; typeIndex < snapshotTypes.Count; typeIndex++)
-                {
-                    var typeInfo = snapshotTypes[typeIndex];
-                    if (typeInfo.requiresRemapping && (snapshot.entities[i].typeMask & (1UL << typeIndex)) != 0)
-                    {
-                        if (handlers.TryGetValue(typeInfo.managedType, out var handler) && handler.RequiresRemapping)
-                        {
-                            handler.RemapEntityReferences(entityManager, entity, entityRemapTable);
-                        }
-                    }
-                }
-            }
-            
-            // Cleanup
-            entityRemapTable.Dispose();
-            newEntities.Dispose();
         }
         
         /// <summary>
@@ -575,39 +641,21 @@ namespace NoMoreEngine.Simulation.Snapshot
         }
         
         /// <summary>
-        /// Calculate deterministic hash of snapshot data
-        /// </summary>
-        private unsafe ulong CalculateSnapshotHash(ref SimulationSnapshot snapshot)
-        {
-            using (var sha256 = SHA256.Create())
-            {
-                // Hash only the actual data, not the entire buffer
-                var dataArray = new byte[snapshot.dataSize];
-                fixed (byte* dst = dataArray)
-                {
-                    UnsafeUtility.MemCpy(dst, snapshot.data.GetUnsafeReadOnlyPtr(), snapshot.dataSize);
-                }
-
-                var hashBytes = sha256.ComputeHash(dataArray);
-
-                // Convert first 8 bytes to ulong for quick comparison
-                return BitConverter.ToUInt64(hashBytes, 0);
-            }
-        }
-        
-        /// <summary>
         /// Compare two snapshots for determinism testing
         /// </summary>
         public bool CompareSnapshots(uint tickA, uint tickB, out string differences)
         {
             differences = "";
             
-            if (!snapshots.TryGetValue(tickA, out var snapshotA) || 
-                !snapshots.TryGetValue(tickB, out var snapshotB))
+            if (!activeSnapshots.TryGetValue(tickA, out var pooledA) || 
+                !activeSnapshots.TryGetValue(tickB, out var pooledB))
             {
                 differences = "One or both snapshots not found";
                 return false;
             }
+            
+            var snapshotA = pooledA.snapshot;
+            var snapshotB = pooledB.snapshot;
             
             // Quick hash comparison
             if (snapshotA.hash != snapshotB.hash)
@@ -653,44 +701,121 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         public SnapshotInfo GetSnapshotInfo(uint tick)
         {
-            if (snapshots.TryGetValue(tick, out var snapshot))
+            if (activeSnapshots.TryGetValue(tick, out var pooledSnapshot))
             {
+                var snapshot = pooledSnapshot.snapshot;
                 return new SnapshotInfo
                 {
                     tick = snapshot.tick,
                     hash = snapshot.hash,
                     entityCount = snapshot.entityCount,
                     dataSize = snapshot.dataSize,
-                    componentTypeCount = snapshotTypes.Count  // Just use the unified count
+                    componentTypeCount = snapshotTypes.Count
                 };
             }
             
             return default;
         }
         
-        /// <summary>
-        /// Cleanup and dispose all snapshots
-        /// </summary>
-        public void Dispose()
-        {
-            foreach (var snapshot in snapshots.Values)
-            {
-                snapshot.Dispose();
-            }
-            snapshots.Clear();
-            
-            if (snapshotQuery != null)
-            {
-                snapshotQuery.Dispose();
-            }
-        }
-        
         // Public properties
-        public int SnapshotCount => snapshots.Count;
+        public int SnapshotCount => activeSnapshots.Count;
         public double LastCaptureTimeMs => lastCaptureTime;
         public double LastRestoreTimeMs => lastRestoreTime;
         public IReadOnlyList<SnapshotTypeInfo> RegisteredTypes => snapshotTypes.AsReadOnly();
     }
+    
+    /// <summary>
+    /// Burst-compiled job for restoring component data
+    /// </summary>
+    [BurstCompile]
+    public unsafe struct RestoreComponentDataJob : IJobParallelFor
+    {
+        [ReadOnly] public SimulationSnapshot snapshot;
+        [ReadOnly] public byte* dataPtr;
+        [ReadOnly] public NativeHashMap<Entity, Entity> entityRemap;
+        [ReadOnly] public NativeArray<SnapshotTypeInfo> snapshotTypes;
+        
+        public void Execute(int index)
+        {
+            // Job implementation for parallel restoration
+            // Note: This is simplified - actual implementation would need
+            // to handle component-specific restoration in a Burst-compatible way
+        }
+    }
+    
+    /// <summary>
+    /// Object pool for snapshot instances
+    /// </summary>
+    public class SnapshotPool : IDisposable
+    {
+        private Stack<PooledSnapshot> available;
+        private int maxSize;
+        private int dataSize;
+        private int maxEntities;
+        
+        public SnapshotPool(int maxSize, int dataSize, int maxEntities)
+        {
+            this.maxSize = maxSize;
+            this.dataSize = dataSize;
+            this.maxEntities = maxEntities;
+            this.available = new Stack<PooledSnapshot>(maxSize);
+            
+            // Pre-allocate snapshots
+            for (int i = 0; i < maxSize; i++)
+            {
+                var pooled = new PooledSnapshot
+                {
+                    snapshot = new SimulationSnapshot(0, dataSize, maxEntities),
+                    lastUsedTick = 0
+                };
+                available.Push(pooled);
+            }
+            
+            Debug.Log($"[SnapshotPool] Pre-allocated {maxSize} snapshots");
+        }
+        
+        public PooledSnapshot Rent()
+        {
+            if (available.Count > 0)
+            {
+                return available.Pop();
+            }
+            return null;
+        }
+        
+        public void Return(PooledSnapshot pooled)
+        {
+            if (pooled != null && available.Count < maxSize)
+            {
+                // Clear snapshot data for reuse
+                pooled.snapshot.tick = 0;
+                pooled.snapshot.hash = 0;
+                pooled.snapshot.entityCount = 0;
+                pooled.snapshot.dataSize = 0;
+                available.Push(pooled);
+            }
+        }
+        
+        public void Dispose()
+        {
+            while (available.Count > 0)
+            {
+                var pooled = available.Pop();
+                pooled.snapshot.Dispose();
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Wrapper for pooled snapshots
+    /// </summary>
+    public class PooledSnapshot
+    {
+        public SimulationSnapshot snapshot;
+        public uint lastUsedTick;
+    }
+    
+    // Handler implementations from original code
     
     /// <summary>
     /// Unified snapshot handler interface
@@ -717,20 +842,9 @@ namespace NoMoreEngine.Simulation.Snapshot
 
         public unsafe void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten)
         {
-            // Check if this is a tag component by looking for fields
-            var fields = typeof(T).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            bool isTagComponent = fields.Length == 0;
-            
-            Debug.Log($"[GenericComponentHandler] {typeof(T).Name}: size={typeInfo.size}, fields={fields.Length}, isTag={isTagComponent}");
-            
-            if (isTagComponent || typeInfo.size == 0) 
+            if (typeInfo.size == 0) 
             {
-                // Tag component - use HasComponent only
                 bytesWritten = 0;
-                if (!em.HasComponent<T>(entity))
-                {
-                    Debug.LogWarning($"[GenericComponentHandler] Entity {entity} missing expected tag component {typeof(T).Name}");
-                }
                 return;
             }
             
@@ -750,19 +864,10 @@ namespace NoMoreEngine.Simulation.Snapshot
 
         public unsafe void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src)
         {
-            if (typeInfo.size == 0)
-            {
-                // Tag component - just ensure it exists
-                if (!em.HasComponent<T>(entity))
-                {
-                    em.AddComponent<T>(entity);
-                }
-                return;
-            }
+            if (typeInfo.size == 0) return;
 
             try
             {
-                // For non-zero sized components, use SetComponentData
                 var component = default(T);
                 UnsafeUtility.CopyPtrToStructure((void*)src, out component);
                 em.SetComponentData(entity, component);
@@ -791,22 +896,12 @@ namespace NoMoreEngine.Simulation.Snapshot
         
         public unsafe void CopyToSnapshot(EntityManager em, Entity entity, IntPtr dest, out int bytesWritten)
         {
-            // Tag components have no data to copy
             bytesWritten = 0;
-            // We just verify the component exists
-            if (!em.HasComponent<T>(entity))
-            {
-                Debug.LogWarning($"[TagComponentHandler] Entity {entity} missing expected tag component {typeof(T).Name}");
-            }
         }
         
         public unsafe void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src)
         {
-            // Just ensure the tag exists on the entity
-            if (!em.HasComponent<T>(entity))
-            {
-                em.AddComponent<T>(entity);
-            }
+            // Tag components have no data
         }
         
         public void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap) { }

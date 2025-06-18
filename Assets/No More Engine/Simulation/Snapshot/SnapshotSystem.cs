@@ -1,19 +1,17 @@
 using Unity.Entities;
-using Unity.Burst;
 using UnityEngine;
 using Unity.Collections;
 using NoMoreEngine.Simulation.Components;
 using System.Collections.Generic;
 using NoMoreEngine.Simulation.Systems;
 using NoMoreEngine.Input;
-using Unity.Mathematics.FixedPoint;
 using NoMoreEngine.Simulation.Bridge;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
     /// <summary>
-    /// Deterministic snapshot system - captures and restores exact state
-    /// No post-restore modifications to maintain determinism
+    /// Optimized snapshot system that works with pooled snapshots and in-place restoration
+    /// Defers to SimulationTimeSystem for timing and SimulationEntityManager for entity ops
     /// </summary>
     [UpdateInGroup(typeof(SimulationStepSystemGroup), OrderLast = true)]
     [UpdateAfter(typeof(CleanupPhase))]
@@ -21,141 +19,178 @@ namespace NoMoreEngine.Simulation.Snapshot
     {
         private SnapshotManager snapshotManager;
         private SimulationTimeSystem timeSystem;
+        private SimulationEntityManager simEntityManager;
         private PlayerInputMovementSystem inputMovementSystem;
 
         // Configuration
         private bool autoSnapshot = false;
         private uint snapshotInterval = 60; // Snapshot every second at 60Hz
         private uint lastSnapshotTick = 0;
+        
+        // Performance monitoring
+        private float averageCaptureTime = 0f;
+        private float averageRestoreTime = 0f;
+        private int captureCount = 0;
+        private int restoreCount = 0;
 
         // Rollback support
-        private Queue<uint> snapshotHistory;
+        private CircularBuffer<uint> snapshotHistory;
         private const int MAX_HISTORY = 10;
 
-        // Initialization tracking
-        private float initializationTime = 0f;
-        private const float INITIALIZATION_DELAY = 0.1f;
+        // Deferred operations to avoid mid-frame issues
+        private Queue<System.Action> deferredOperations;
 
         protected override void OnCreate()
         {
-            // Initialize snapshot manager
+            // Initialize optimized snapshot manager
             snapshotManager = new SnapshotManager(World, MAX_HISTORY);
-            snapshotHistory = new Queue<uint>(MAX_HISTORY);
+            snapshotHistory = new CircularBuffer<uint>(MAX_HISTORY);
+            deferredOperations = new Queue<System.Action>();
 
-            // Get references to other systems
+            // Get system references
             timeSystem = World.GetExistingSystemManaged<SimulationTimeSystem>();
+            simEntityManager = SimulationEntityManager.Instance;
             inputMovementSystem = World.GetExistingSystemManaged<PlayerInputMovementSystem>();
 
-            Debug.Log("[SnapshotSystem] Initialized for deterministic operation");
+            // Validate architectural dependencies
+            if (timeSystem == null)
+            {
+                Debug.LogError("[SnapshotSystem] SimulationTimeSystem not found - this violates architecture!");
+            }
+
+            Debug.Log("[SnapshotSystem] Initialized with optimized pooling system");
         }
 
         protected override void OnDestroy()
         {
             snapshotManager?.Dispose();
+            
+            // Log performance summary
+            if (captureCount > 0 || restoreCount > 0)
+            {
+                Debug.Log($"[SnapshotSystem] Performance Summary:\n" +
+                         $"  Captures: {captureCount}, Avg: {averageCaptureTime:F2}ms\n" +
+                         $"  Restores: {restoreCount}, Avg: {averageRestoreTime:F2}ms");
+            }
         }
 
         protected override void OnUpdate()
         {
-            // Track initialization time
-            initializationTime += SystemAPI.Time.DeltaTime;
+            // Process any deferred operations first
+            while (deferredOperations.Count > 0)
+            {
+                var operation = deferredOperations.Dequeue();
+                operation?.Invoke();
+            }
 
-            // Try to get time component - it might not exist on first frame
+            // Always defer to SimulationTimeSystem for timing
             if (!SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time))
             {
-                return; // Skip if time system hasn't initialized yet
+                return; // No time system, can't proceed
             }
 
             // Auto-snapshot at intervals if enabled
             if (autoSnapshot && time.currentTick >= lastSnapshotTick + snapshotInterval)
             {
-                CaptureSnapshot();
+                // Defer snapshot to avoid mid-frame capture
+                deferredOperations.Enqueue(() => CaptureSnapshotInternal(time.currentTick));
                 lastSnapshotTick = time.currentTick;
             }
         }
 
         /// <summary>
-        /// Capture a snapshot of the current simulation state
+        /// Public API to capture a snapshot
         /// </summary>
         public void CaptureSnapshot()
         {
-            // Wait for brief initialization period to ensure all systems are ready
-            if (initializationTime < INITIALIZATION_DELAY)
+            if (timeSystem == null)
             {
-                Debug.LogWarning($"[SnapshotSystem] Waiting for initialization ({initializationTime:F3}s / {INITIALIZATION_DELAY}s)");
+                Debug.LogError("[SnapshotSystem] Cannot capture - SimulationTimeSystem not available");
                 return;
             }
 
-            if (!SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time))
+            var currentTick = timeSystem.GetCurrentTick();
+            
+            // Defer to next frame to ensure consistent state
+            deferredOperations.Enqueue(() => CaptureSnapshotInternal(currentTick));
+        }
+
+        /// <summary>
+        /// Internal capture implementation
+        /// </summary>
+        private void CaptureSnapshotInternal(uint tick)
+        {
+            if (snapshotManager.CaptureSnapshot(tick))
             {
-                Debug.LogWarning("[SnapshotSystem] Cannot capture snapshot - time system not ready");
-                return;
-            }
-
-            // Log state before capture
-            LogSystemState("Before Capture", time.currentTick);
-
-            if (snapshotManager.CaptureSnapshot(time.currentTick))
-            {
-                // Track snapshot history
-                snapshotHistory.Enqueue(time.currentTick);
-                while (snapshotHistory.Count > MAX_HISTORY)
-                {
-                    snapshotHistory.Dequeue();
-                }
-
-                // Create metadata entity
-                CreateSnapshotMetadata(time.currentTick);
+                // Track in history
+                snapshotHistory.Add(tick);
                 
-                Debug.Log($"[SnapshotSystem] Successfully captured snapshot at tick {time.currentTick}");
+                // Update performance metrics
+                captureCount++;
+                averageCaptureTime = ((averageCaptureTime * (captureCount - 1)) + 
+                                     (float)snapshotManager.LastCaptureTimeMs) / captureCount;
+                
+                // Create metadata entity
+                CreateSnapshotMetadata(tick);
+                
+                Debug.Log($"[SnapshotSystem] Captured snapshot at tick {tick} " +
+                         $"(avg: {averageCaptureTime:F2}ms)");
             }
         }
 
         /// <summary>
-        /// Restore simulation state to a specific tick
-        /// Deterministic - only restores exact captured state, no modifications
+        /// Restore simulation to a specific tick using optimized in-place restoration
         /// </summary>
         public bool RestoreSnapshot(uint tick)
         {
-            Debug.Log($"[SnapshotSystem] Beginning snapshot restore to tick {tick}");
+            Debug.Log($"[SnapshotSystem] Restoring to tick {tick} using optimized in-place method");
             
-            // 1. Destroy all game entities through SimulationEntityManager
-            if (SimulationEntityManager.Instance == null)
+            // Validate dependencies
+            if (simEntityManager == null)
             {
                 Debug.LogError("[SnapshotSystem] SimulationEntityManager not available!");
                 return false;
             }
             
-            SimulationEntityManager.Instance.DestroyAllManagedEntities();
-            
-            // 2. Restore the snapshot (creates new game entities)
+            if (timeSystem == null)
+            {
+                Debug.LogError("[SnapshotSystem] SimulationTimeSystem not available!");
+                return false;
+            }
+
+            // 1. Restore snapshot using optimized manager (in-place updates)
             if (!snapshotManager.RestoreSnapshot(tick))
             {
                 Debug.LogError($"[SnapshotSystem] Failed to restore snapshot for tick {tick}");
                 return false;
             }
 
-            // 3. Update time on the existing singleton
-            if (timeSystem != null)
-            {
-                timeSystem.RestoreToTick(tick);
-            }
+            // 2. Restore time through SimulationTimeSystem
+            timeSystem.RestoreToTick(tick);
 
-            // 4. Initialize collision states on restored entities
-            InitializeCollisionStates();
+            // 3. Ensure collision states exist (lightweight operation)
+            EnsureCollisionStates();
 
-            // 5. Reconnect input system
+            // 4. Reconnect input system
             RestorePlayerControl();
             
-            Debug.Log($"[SnapshotSystem] Successfully restored snapshot at tick {tick}");
+            // Update performance metrics
+            restoreCount++;
+            averageRestoreTime = ((averageRestoreTime * (restoreCount - 1)) + 
+                                 (float)snapshotManager.LastRestoreTimeMs) / restoreCount;
+            
+            Debug.Log($"[SnapshotSystem] Restored to tick {tick} in {snapshotManager.LastRestoreTimeMs:F2}ms " +
+                     $"(avg: {averageRestoreTime:F2}ms)");
+            
             return true;
         }
 
-        private void InitializeCollisionStates()
+        /// <summary>
+        /// Ensure collision state components exist (doesn't modify values)
+        /// </summary>
+        private void EnsureCollisionStates()
         {
-            // CollisionStateSystem is an ISystem (struct), not ComponentSystemBase
-            // We don't need to get a reference to it - it will run automatically
-            // Just ensure the components exist
-            
+            // Only add components if missing, don't modify existing ones
             var needsStateQuery = EntityManager.CreateEntityQuery(
                 ComponentType.ReadOnly<CollisionBoundsComponent>(),
                 ComponentType.ReadOnly<SimpleMovementComponent>(),
@@ -164,17 +199,9 @@ namespace NoMoreEngine.Simulation.Snapshot
 
             if (!needsStateQuery.IsEmpty)
             {
+                var count = needsStateQuery.CalculateEntityCount();
                 EntityManager.AddComponent<CollisionStateComponent>(needsStateQuery);
-
-                // Initialize with defaults
-                var entities = needsStateQuery.ToEntityArray(Allocator.Temp);
-                foreach (var entity in entities)
-                {
-                    EntityManager.SetComponentData(entity, CollisionStateComponent.Default);
-                }
-                entities.Dispose();
-
-                Debug.Log($"[SnapshotSystem] Initialized collision states for {needsStateQuery.CalculateEntityCount()} entities");
+                Debug.Log($"[SnapshotSystem] Added collision states to {count} entities");
             }
 
             needsStateQuery.Dispose();
@@ -182,7 +209,6 @@ namespace NoMoreEngine.Simulation.Snapshot
 
         /// <summary>
         /// Restore player control connections after snapshot restore
-        /// This only reconnects the input system, doesn't modify game state
         /// </summary>
         private void RestorePlayerControl()
         {
@@ -192,7 +218,7 @@ namespace NoMoreEngine.Simulation.Snapshot
                 inputMovementSystem.ForceReconnection();
             }
 
-            // Also ensure InputProcessor knows about the player entities
+            // Register player entities with InputProcessor
             var inputProcessor = InputProcessor.Instance;
             if (inputProcessor != null)
             {
@@ -201,73 +227,70 @@ namespace NoMoreEngine.Simulation.Snapshot
                     ComponentType.ReadOnly<PlayerControlComponent>()
                 );
 
-                var playerEntities = playerQuery.ToEntityArray(Allocator.Temp);
-
-                foreach (var playerEntity in playerEntities)
+                using (var playerEntities = playerQuery.ToEntityArray(Allocator.Temp))
+                using (var playerControls = playerQuery.ToComponentDataArray<PlayerControlComponent>(Allocator.Temp))
                 {
-                    if (EntityManager.HasComponent<PlayerControlComponent>(playerEntity))
+                    for (int i = 0; i < playerEntities.Length; i++)
                     {
-                        var playerControl = EntityManager.GetComponentData<PlayerControlComponent>(playerEntity);
-                        inputProcessor.RegisterPlayerEntity(playerEntity, playerControl.playerIndex);
+                        inputProcessor.RegisterPlayerEntity(playerEntities[i], playerControls[i].playerIndex);
                     }
+                    
+                    Debug.Log($"[SnapshotSystem] Re-registered {playerEntities.Length} player entities");
                 }
 
-                playerEntities.Dispose();
                 playerQuery.Dispose();
             }
         }
 
         /// <summary>
-        /// Log system state for debugging
+        /// Rollback to a previous tick with optimized performance
         /// </summary>
-        private void LogSystemState(string context, uint tick)
+        public bool RollbackToTick(uint targetTick)
         {
-            var playerQuery = EntityManager.CreateEntityQuery(
-                ComponentType.ReadOnly<PlayerControlledTag>(),
-                ComponentType.ReadOnly<PlayerControlComponent>(),
-                ComponentType.ReadOnly<FixTransformComponent>()
-            );
-            
-            var collisionStateQuery = EntityManager.CreateEntityQuery(
-                ComponentType.ReadOnly<CollisionStateComponent>()
-            );
-            
-            var playerCount = playerQuery.CalculateEntityCount();
-            var collisionStateCount = collisionStateQuery.CalculateEntityCount();
-            
-            Debug.Log($"[SnapshotSystem] {context} at tick {tick}:");
-            Debug.Log($"  - Player entities: {playerCount}");
-            Debug.Log($"  - Entities with collision state: {collisionStateCount}");
-            
-            // Log detailed player info
-            if (playerCount > 0)
+            if (timeSystem == null || !SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time))
             {
-                var entities = playerQuery.ToEntityArray(Allocator.Temp);
-                var controls = playerQuery.ToComponentDataArray<PlayerControlComponent>(Allocator.Temp);
-                var transforms = playerQuery.ToComponentDataArray<FixTransformComponent>(Allocator.Temp);
-                
-                for (int i = 0; i < Mathf.Min(playerCount, 5); i++)
-                {
-                    bool hasCollisionState = EntityManager.HasComponent<CollisionStateComponent>(entities[i]);
-                    string groundedInfo = "";
-                    
-                    if (hasCollisionState)
-                    {
-                        var collisionState = EntityManager.GetComponentData<CollisionStateComponent>(entities[i]);
-                        groundedInfo = $", Grounded: {collisionState.isGrounded}";
-                    }
-                    
-                    Debug.Log($"    Entity {entities[i].Index}: Player {controls[i].playerIndex}, " +
-                             $"Pos: {transforms[i].position}{groundedInfo}");
-                }
-                
-                entities.Dispose();
-                controls.Dispose();
-                transforms.Dispose();
+                Debug.LogError("[SnapshotSystem] Cannot rollback - time system not available");
+                return false;
             }
-            
-            playerQuery.Dispose();
-            collisionStateQuery.Dispose();
+
+            var currentTick = time.currentTick;
+
+            if (targetTick >= currentTick)
+            {
+                Debug.LogWarning($"[SnapshotSystem] Cannot rollback to future tick {targetTick}");
+                return false;
+            }
+
+            // Find the nearest snapshot
+            uint nearestSnapshot = 0;
+            for (int i = 0; i < snapshotHistory.Count; i++)
+            {
+                var tick = snapshotHistory[i];
+                if (tick <= targetTick && tick > nearestSnapshot)
+                {
+                    nearestSnapshot = tick;
+                }
+            }
+
+            if (nearestSnapshot == 0)
+            {
+                Debug.LogWarning($"[SnapshotSystem] No snapshot available for rollback to tick {targetTick}");
+                return false;
+            }
+
+            // Perform optimized restore
+            if (RestoreSnapshot(nearestSnapshot))
+            {
+                Debug.Log($"[SnapshotSystem] Rolled back from tick {currentTick} to {nearestSnapshot} " +
+                         $"(target was {targetTick}, will resimulate {targetTick - nearestSnapshot} ticks)");
+
+                // TODO: Re-simulate from nearestSnapshot to targetTick
+                // This requires replaying input and running simulation steps
+
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -285,62 +308,12 @@ namespace NoMoreEngine.Simulation.Snapshot
                 entityCount = snapshotManager.GetSnapshotInfo(tick).entityCount,
                 totalDataSize = snapshotManager.GetSnapshotInfo(tick).dataSize,
                 captureTimeMs = snapshotManager.LastCaptureTimeMs,
-                restoreTimeMs = 0
+                restoreTimeMs = snapshotManager.LastRestoreTimeMs
             });
         }
 
         /// <summary>
-        /// Rollback to a previous tick (for rollback networking)
-        /// </summary>
-        public bool RollbackToTick(uint targetTick)
-        {
-            if (!SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time))
-            {
-                Debug.LogWarning("[SnapshotSystem] Cannot rollback - time system not ready");
-                return false;
-            }
-
-            var currentTick = time.currentTick;
-
-            if (targetTick >= currentTick)
-            {
-                Debug.LogWarning($"[SnapshotSystem] Cannot rollback to future tick {targetTick}");
-                return false;
-            }
-
-            // Find the nearest snapshot before or at the target tick
-            uint nearestSnapshot = 0;
-            foreach (var tick in snapshotHistory)
-            {
-                if (tick <= targetTick && tick > nearestSnapshot)
-                {
-                    nearestSnapshot = tick;
-                }
-            }
-
-            if (nearestSnapshot == 0)
-            {
-                Debug.LogWarning($"[SnapshotSystem] No snapshot available for rollback to tick {targetTick}");
-                return false;
-            }
-
-            // Restore to nearest snapshot
-            if (RestoreSnapshot(nearestSnapshot))
-            {
-                Debug.Log($"[SnapshotSystem] Rolled back from tick {currentTick} to {nearestSnapshot} " +
-                         $"(target was {targetTick})");
-
-                // TODO: Re-simulate from nearestSnapshot to targetTick
-                // This requires replaying input and running simulation steps
-
-                return true;
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Compare two snapshots for determinism verification
+        /// Verify determinism between snapshots
         /// </summary>
         public bool VerifyDeterminism(uint tickA, uint tickB)
         {
@@ -357,19 +330,20 @@ namespace NoMoreEngine.Simulation.Snapshot
         }
 
         /// <summary>
-        /// Get snapshot info for debugging
+        /// Get performance statistics
         /// </summary>
-        public SnapshotInfo GetSnapshotInfo(uint tick)
+        public SnapshotPerformanceStats GetPerformanceStats()
         {
-            return snapshotManager.GetSnapshotInfo(tick);
-        }
-
-        /// <summary>
-        /// Get all available snapshot ticks
-        /// </summary>
-        public uint[] GetAvailableSnapshots()
-        {
-            return snapshotHistory.ToArray();
+            return new SnapshotPerformanceStats
+            {
+                captureCount = captureCount,
+                restoreCount = restoreCount,
+                averageCaptureTimeMs = averageCaptureTime,
+                averageRestoreTimeMs = averageRestoreTime,
+                activeSnapshotCount = snapshotManager.SnapshotCount,
+                lastCaptureTimeMs = (float)snapshotManager.LastCaptureTimeMs,
+                lastRestoreTimeMs = (float)snapshotManager.LastRestoreTimeMs
+            };
         }
 
         // Configuration methods
@@ -378,16 +352,70 @@ namespace NoMoreEngine.Simulation.Snapshot
         public bool IsAutoSnapshotEnabled => autoSnapshot;
         public uint SnapshotInterval => snapshotInterval;
         public int SnapshotCount => snapshotManager.SnapshotCount;
+        public uint[] GetAvailableSnapshots() => snapshotHistory.ToArray();
+        public SnapshotInfo GetSnapshotInfo(uint tick) => snapshotManager.GetSnapshotInfo(tick);
     }
 
     /// <summary>
-    /// Singleton component for snapshot configuration
+    /// Circular buffer for snapshot history
     /// </summary>
-    public struct SnapshotConfigComponent : IComponentData
+    public class CircularBuffer<T>
     {
-        public bool autoSnapshotEnabled;
-        public uint snapshotInterval;
-        public uint maxSnapshots;
-        public bool enableValidation;
+        private T[] buffer;
+        private int head;
+        private int count;
+
+        public CircularBuffer(int capacity)
+        {
+            buffer = new T[capacity];
+            head = 0;
+            count = 0;
+        }
+
+        public void Add(T item)
+        {
+            buffer[head] = item;
+            head = (head + 1) % buffer.Length;
+            if (count < buffer.Length)
+                count++;
+        }
+
+        public T this[int index]
+        {
+            get
+            {
+                if (index < 0 || index >= count)
+                    throw new System.IndexOutOfRangeException();
+                
+                int actualIndex = (head - count + index + buffer.Length) % buffer.Length;
+                return buffer[actualIndex];
+            }
+        }
+
+        public int Count => count;
+
+        public T[] ToArray()
+        {
+            var result = new T[count];
+            for (int i = 0; i < count; i++)
+            {
+                result[i] = this[i];
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Performance statistics for snapshot operations
+    /// </summary>
+    public struct SnapshotPerformanceStats
+    {
+        public int captureCount;
+        public int restoreCount;
+        public float averageCaptureTimeMs;
+        public float averageRestoreTimeMs;
+        public int activeSnapshotCount;
+        public float lastCaptureTimeMs;
+        public float lastRestoreTimeMs;
     }
 }

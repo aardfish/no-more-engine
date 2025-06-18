@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using NoMoreEngine.Simulation.Components;
 using Unity.Mathematics.FixedPoint;
 using Unity.Collections;
-using System;
 
 namespace NoMoreEngine.Simulation.Bridge
 {
@@ -12,20 +11,16 @@ namespace NoMoreEngine.Simulation.Bridge
     /// Centralized entity management system for the simulation
     /// Handles all entity creation, destruction, and tracking within the simulation world
     /// 
-    /// IMPORTANT NAMING CONVENTION:
-    /// - 'entityManager' refers to Unity's ECS EntityManager
-    /// - 'simEntityManager' refers to this SimulationEntityManager instance
-    /// This distinction avoids confusion between Unity's built-in system and our custom management layer
+    /// FIXED: Now properly persists as a singleton throughout the entire play session
     /// </summary>
     public class SimulationEntityManager : MonoBehaviour
     {
         [Header("Entity Management Settings")]
         [SerializeField] private int initialEntityCapacity = 1000;
-        //[SerializeField] private bool enableEntityPooling = false; // Future feature
         [SerializeField] private bool debugLogging = false;
 
         // Core references
-        private EntityManager entityManager; // Unity's ECS EntityManager
+        private EntityManager entityManager;
         private World simulationWorld;
 
         // Entity tracking
@@ -46,26 +41,57 @@ namespace NoMoreEngine.Simulation.Bridge
 
         // Singleton for easy access
         private static SimulationEntityManager instance;
-        public static SimulationEntityManager Instance => instance;
+        public static SimulationEntityManager Instance
+        {
+            get
+            {
+                if (instance == null)
+                {
+                    // Try to find existing instance
+                    instance = FindAnyObjectByType<SimulationEntityManager>();
+                    
+                    // If not found, create one
+                    if (instance == null)
+                    {
+                        Debug.Log("[SimulationEntityManager] Creating singleton instance");
+                        var go = new GameObject("SimulationEntityManager");
+                        instance = go.AddComponent<SimulationEntityManager>();
+                        
+                        // Make it persist across scenes
+                        DontDestroyOnLoad(go);
+                    }
+                }
+                return instance;
+            }
+        }
 
         #region Initialization
 
         void Awake()
         {
+            // Enforce singleton pattern
             if (instance != null && instance != this)
             {
+                Debug.LogWarning("[SimulationEntityManager] Duplicate instance detected, destroying...");
                 Destroy(gameObject);
                 return;
             }
+            
             instance = this;
-
+            
+            // Make this persist across scene loads
+            DontDestroyOnLoad(gameObject);
+            
             InitializeCollections();
+            
+            Debug.Log("[SimulationEntityManager] Singleton initialized and set to persist");
         }
 
         void OnDestroy()
         {
             if (instance == this)
             {
+                Debug.Log("[SimulationEntityManager] Singleton being destroyed");
                 instance = null;
             }
         }
@@ -86,17 +112,49 @@ namespace NoMoreEngine.Simulation.Bridge
 
         /// <summary>
         /// Initialize with simulation world reference
+        /// Can be called multiple times safely (e.g., when entering InGame state)
         /// </summary>
         public void Initialize(World world)
         {
+            // If already initialized with the same world, skip
+            if (simulationWorld == world && entityManager == world.EntityManager)
+            {
+                if (debugLogging)
+                    Debug.Log("[SimulationEntityManager] Already initialized with this world");
+                return;
+            }
+            
             simulationWorld = world;
             entityManager = world.EntityManager;
+            
+            // Clear any stale entity references if world changed
+            if (allSimulationEntities.Count > 0)
+            {
+                Debug.LogWarning("[SimulationEntityManager] World changed, clearing stale entity references");
+                ClearAllTracking();
+            }
 
             if (debugLogging)
-                Debug.Log("[EntityManager] Initialized with simulation world");
+                Debug.Log("[SimulationEntityManager] Initialized with simulation world");
+        }
+        
+        /// <summary>
+        /// Clear all tracking data (used when world changes)
+        /// </summary>
+        private void ClearAllTracking()
+        {
+            allSimulationEntities.Clear();
+            entityMetadata.Clear();
+            foreach (var category in categorizedEntities.Values)
+            {
+                category.Clear();
+            }
+            // Don't clear archetype cache - it's still valid
         }
 
         #endregion
+
+        // ... (rest of the implementation remains the same) ...
 
         #region Entity Creation
 
@@ -105,6 +163,8 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public Entity CreatePlayerEntity(fp3 position, byte playerIndex, bool isLocal = true)
         {
+            if (!ValidateInitialized()) return Entity.Null;
+            
             var entity = entityManager.CreateEntity();
             
             // Core components
@@ -151,6 +211,8 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public Entity CreateEnvironmentEntity(fp3 position, fp3 size, bool isStatic = true)
         {
+            if (!ValidateInitialized()) return Entity.Null;
+            
             var entity = entityManager.CreateEntity();
 
             entityManager.AddComponentData(entity, new FixTransformComponent
@@ -185,6 +247,8 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public Entity CreateProjectileEntity(fp3 position, fp3 velocity, Entity owner)
         {
+            if (!ValidateInitialized()) return Entity.Null;
+            
             var entity = entityManager.CreateEntity();
 
             entityManager.AddComponentData(entity, new FixTransformComponent
@@ -223,10 +287,14 @@ namespace NoMoreEngine.Simulation.Bridge
 
         /// <summary>
         /// Create multiple empty entities for snapshot restoration
-        /// These entities are automatically tracked and will be properly cleaned up
         /// </summary>
         public NativeArray<Entity> CreateEntitiesForRestore(int count, Allocator allocator)
         {
+            if (!ValidateInitialized())
+            {
+                return new NativeArray<Entity>(0, allocator);
+            }
+            
             // Create empty archetype for restoration
             var archetype = entityManager.CreateArchetype();
 
@@ -241,7 +309,7 @@ namespace NoMoreEngine.Simulation.Bridge
             }
 
             if (debugLogging)
-                Debug.Log($"[EntityManager] Created and tracked {count} entities for snapshot restore");
+                Debug.Log($"[SimulationEntityManager] Created and tracked {count} entities for snapshot restore");
 
             return entities;
         }
@@ -251,6 +319,8 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public Entity CreateEntity(EntityArchetype archetype, EntityCategory category, string name = null)
         {
+            if (!ValidateInitialized()) return Entity.Null;
+            
             var entity = entityManager.CreateEntity(archetype);
             TrackEntity(entity, category, name ?? category.ToString());
             return entity;
@@ -261,6 +331,8 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public EntityArchetype GetOrCreateArchetype(string name, params ComponentType[] components)
         {
+            if (!ValidateInitialized()) return default;
+            
             if (!archetypeCache.TryGetValue(name, out var archetype))
             {
                 archetype = entityManager.CreateArchetype(components);
@@ -278,6 +350,8 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public void DestroyEntity(Entity entity)
         {
+            if (!ValidateInitialized()) return;
+            
             if (!entityManager.Exists(entity)) return;
 
             // Get category before destruction
@@ -295,7 +369,7 @@ namespace NoMoreEngine.Simulation.Bridge
             OnEntityDestroyed?.Invoke(entity, category);
 
             if (debugLogging)
-                Debug.Log($"[EntityManager] Destroyed entity {entity.Index} (category: {category})");
+                Debug.Log($"[SimulationEntityManager] Destroyed entity {entity.Index} (category: {category})");
         }
 
         /// <summary>
@@ -303,6 +377,8 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public void DestroyAllInCategory(EntityCategory category)
         {
+            if (!ValidateInitialized()) return;
+            
             if (!categorizedEntities.TryGetValue(category, out var entities)) return;
 
             // Copy to array to avoid modification during iteration
@@ -314,7 +390,7 @@ namespace NoMoreEngine.Simulation.Bridge
                 DestroyEntity(entity);
             }
 
-            Debug.Log($"[EntityManager] Destroyed {toDestroy.Length} entities in category {category}");
+            Debug.Log($"[SimulationEntityManager] Destroyed {toDestroy.Length} entities in category {category}");
         }
 
         /// <summary>
@@ -322,7 +398,9 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public void DestroyAllManagedEntities()
         {
-            Debug.Log($"[EntityManager] DestroyAllManagedEntities called - tracking {allSimulationEntities.Count} entities");
+            if (!ValidateInitialized()) return;
+            
+            Debug.Log($"[SimulationEntityManager] DestroyAllManagedEntities called - tracking {allSimulationEntities.Count} entities");
 
             // Copy to avoid modification during iteration
             var toDestroy = new Entity[allSimulationEntities.Count];
@@ -346,7 +424,7 @@ namespace NoMoreEngine.Simulation.Bridge
                 category.Clear();
             }
 
-            Debug.Log($"[EntityManager] Destroyed {destroyedCount} game entities");
+            Debug.Log($"[SimulationEntityManager] Destroyed {destroyedCount} game entities");
         }
 
         #endregion
@@ -373,7 +451,7 @@ namespace NoMoreEngine.Simulation.Bridge
             OnEntityCreated?.Invoke(entity, category);
 
             if (debugLogging)
-                Debug.Log($"[EntityManager] Tracked entity {entity.Index} as {name} (category: {category})");
+                Debug.Log($"[SimulationEntityManager] Tracked entity {entity.Index} as {name} (category: {category})");
         }
 
         private void UntrackEntity(Entity entity)
@@ -396,6 +474,8 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public Entity[] GetEntitiesInCategory(EntityCategory category)
         {
+            if (!ValidateInitialized()) return new Entity[0];
+            
             if (categorizedEntities.TryGetValue(category, out var entities))
             {
                 var array = new Entity[entities.Count];
@@ -410,9 +490,11 @@ namespace NoMoreEngine.Simulation.Bridge
         /// </summary>
         public void UpdateEntityCategory(Entity entity, EntityCategory newCategory, string newName = null)
         {
+            if (!ValidateInitialized()) return;
+            
             if (!entityMetadata.TryGetValue(entity, out var metadata))
             {
-                Debug.LogError($"[EntityManager] Cannot update category for untracked entity {entity.Index}");
+                Debug.LogError($"[SimulationEntityManager] Cannot update category for untracked entity {entity.Index}");
                 return;
             }
             
@@ -430,7 +512,7 @@ namespace NoMoreEngine.Simulation.Bridge
             entityMetadata[entity] = metadata;
             
             if (debugLogging)
-                Debug.Log($"[EntityManager] Updated entity {entity.Index} from {metadata.category} to {newCategory}");
+                Debug.Log($"[SimulationEntityManager] Updated entity {entity.Index} from {metadata.category} to {newCategory}");
         }
 
         /// <summary>
@@ -495,10 +577,25 @@ namespace NoMoreEngine.Simulation.Bridge
         #region Validation and Cleanup
 
         /// <summary>
+        /// Validate that the manager is properly initialized
+        /// </summary>
+        private bool ValidateInitialized()
+        {
+            if (simulationWorld == null || !simulationWorld.IsCreated || entityManager == null)
+            {
+                Debug.LogError("[SimulationEntityManager] Not initialized! Call Initialize(world) first.");
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Validate all tracked entities still exist
         /// </summary>
         public void ValidateTrackedEntities()
         {
+            if (!ValidateInitialized()) return;
+            
             var toRemove = new List<Entity>();
 
             foreach (var entity in allSimulationEntities)
@@ -512,18 +609,20 @@ namespace NoMoreEngine.Simulation.Bridge
             foreach (var entity in toRemove)
             {
                 UntrackEntity(entity);
-                Debug.LogWarning($"[EntityManager] Removed invalid entity {entity.Index} from tracking");
+                Debug.LogWarning($"[SimulationEntityManager] Removed invalid entity {entity.Index} from tracking");
             }
 
             if (toRemove.Count > 0)
             {
-                Debug.Log($"[EntityManager] Cleaned up {toRemove.Count} invalid entities");
+                Debug.Log($"[SimulationEntityManager] Cleaned up {toRemove.Count} invalid entities");
             }
         }
 
         #endregion
     }
 
+    // ... (EntityCategory, EntityMetadata, and EntityStatistics remain the same) ...
+    
     /// <summary>
     /// Categories for organizing entities
     /// </summary>

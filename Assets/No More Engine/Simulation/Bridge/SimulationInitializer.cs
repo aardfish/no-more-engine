@@ -1,16 +1,14 @@
 using UnityEngine;
 using Unity.Entities;
 using NoMoreEngine.Session;
-using NoMoreEngine.Simulation.Components;
 using Unity.Mathematics.FixedPoint;
-using UnityEngine.Video;
-
 
 namespace NoMoreEngine.Simulation.Bridge
 {
     /// <summary>
     /// SimulationInitializer - Bridge between GameConfiguration and ECS simulation
     /// Responsible for initial entity creation at match start only
+    /// FIXED: Now properly uses SimulationEntityManager singleton
     /// </summary>
     public class SimulationInitializer : MonoBehaviour
     {
@@ -20,12 +18,13 @@ namespace NoMoreEngine.Simulation.Bridge
 
         void Awake()
         {
-            // Get or create our simulation entity manager
+            // Get the singleton instance of SimulationEntityManager
+            // This will create it if it doesn't exist
             simEntityManager = SimulationEntityManager.Instance;
+            
             if (simEntityManager == null)
             {
-                var simEntityManagerObject = new GameObject("SimulationEntityManager");
-                simEntityManager = simEntityManagerObject.AddComponent<SimulationEntityManager>();
+                Debug.LogError("[SimulationInit] Failed to get SimulationEntityManager instance!");
             }
         }
 
@@ -46,7 +45,15 @@ namespace NoMoreEngine.Simulation.Bridge
             entityManager = simulationWorld.EntityManager;
 
             // Initialize our simulation entity manager with world
-            simEntityManager.Initialize(simulationWorld);
+            if (simEntityManager != null)
+            {
+                simEntityManager.Initialize(simulationWorld);
+            }
+            else
+            {
+                Debug.LogError("[SimulationInit] SimulationEntityManager not available!");
+                return false;
+            }
 
             Debug.Log($"[SimulationInit] Initializing match: {config.stageName}, {config.GetActivePlayerCount()} players");
 
@@ -72,7 +79,14 @@ namespace NoMoreEngine.Simulation.Bridge
         {
             Debug.Log("[SimulationInit] Cleaning up match entities");
 
-            simEntityManager.DestroyAllManagedEntities();
+            if (simEntityManager != null)
+            {
+                simEntityManager.DestroyAllManagedEntities();
+            }
+            else
+            {
+                Debug.LogWarning("[SimulationInit] SimulationEntityManager not available for cleanup");
+            }
         }
 
         private void CreateStage(string stageName)
@@ -180,83 +194,13 @@ namespace NoMoreEngine.Simulation.Bridge
                 if (slot.IsBot)
                 {
                     // AI component not yet implemented
-                    // .AddComponent<AIControlledTag>(playerEntity);
+                    // entityManager.AddComponent<AIControlledTag>(playerEntity);
                 }
 
                 spawnIndex++;
             }
 
             Debug.Log($"[SimulationInit] Created {spawnIndex} player entities");
-        }
-
-        private Entity CreatePlayerEntity(PlayerSlot slot, fp3 spawnPosition)
-        {
-            var entity = entityManager.CreateEntity();
-
-            // Core components
-            entityManager.AddComponentData(entity, new FixTransformComponent
-            {
-                position = spawnPosition,
-                rotation = fpquaternion.identity,
-                scale = new fp3(fp.one)
-            });
-
-            entityManager.AddComponentData(entity, new SimEntityTypeComponent
-            {
-                simEntityType = SimEntityType.Player
-            });
-
-            // Movement
-            entityManager.AddComponentData(entity, new SimpleMovementComponent
-            {
-                velocity = fp3.zero,
-                isMoving = false
-            });
-
-            // Collision
-            entityManager.AddComponentData(entity, new CollisionBoundsComponent
-            {
-                size = new fp3(1, 2, 1),
-                offset = fp3.zero,
-                tolerance = (fp)0.001f
-            });
-
-            entityManager.AddComponentData(entity, new CollisionResponseComponent
-            {
-                responseType = CollisionResponse.Stop,
-                entityLayer = CollisionLayer.Player,
-                collidesWith = CollisionLayer.Environment | CollisionLayer.Enemy | CollisionLayer.Player,
-                bounciness = (fp)0.1f,
-                friction = (fp)0.2f
-            });
-
-            entityManager.AddBuffer<CollisionEventBuffer>(entity);
-
-            // Physics
-            entityManager.AddComponentData(entity, PhysicsComponent.Normal);
-
-            // Player-specific components
-            if (slot.IsLocal)
-            {
-                // Tag for player input system
-                entityManager.AddComponent<PlayerControlledTag>(entity);
-                
-                // Add player control component with index
-                entityManager.AddComponentData(entity, new PlayerControlComponent
-                {
-                    playerIndex = (byte)slot.slotIndex
-                });
-                
-                Debug.Log($"[SimulationInit] Added player control components for P{slot.slotIndex + 1}");
-            }
-            else if (slot.IsBot)
-            {
-                // TODO: Add AI component
-            }
-
-            Debug.Log($"[SimulationInit] Created {slot.type} player entity at {spawnPosition}");
-
-            return entity;
         }
 
         private void CreateMatchRules(GameConfiguration config)
@@ -269,7 +213,7 @@ namespace NoMoreEngine.Simulation.Bridge
 
             var rulesEntity = simEntityManager.CreateEntity(archetype, EntityCategory.System, "MatchRules");
 
-            // Use Unity's EntityManger to set component data
+            // Use Unity's EntityManager to set component data
             entityManager.SetComponentData(rulesEntity, new MatchRulesComponent
             {
                 gameMode = config.gameMode,
