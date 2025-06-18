@@ -9,7 +9,6 @@ using System.Linq;
 using System.Security.Cryptography;
 using NoMoreEngine.Simulation.Components;
 using NoMoreEngine.Simulation.Bridge;
-using Unity.Entities.UniversalDelegates;
 
 namespace NoMoreEngine.Simulation.Snapshot
 {
@@ -54,7 +53,7 @@ namespace NoMoreEngine.Simulation.Snapshot
             this.snapshots = new Dictionary<uint, SimulationSnapshot>(maxSnapshots);
             this.typeToIndex = new Dictionary<Type, int>();
             this.handlers = new Dictionary<Type, ISnapshotHandler>();
-            
+
             // Discover all snapshotable types
             DiscoverSnapshotableTypes();
 
@@ -70,6 +69,15 @@ namespace NoMoreEngine.Simulation.Snapshot
         private void DiscoverSnapshotableTypes()
         {
             snapshotTypes = new List<SnapshotTypeInfo>();
+
+            var singletonTypes = new HashSet<Type>
+            {
+                typeof(CollisionLayerMatrix),
+                typeof(GlobalGravityComponent),
+                typeof(SimulationTimeComponent),
+                typeof(TimeAccumulatorComponent),
+                typeof(SnapshotMetadata)
+            };
 
             var assemblies = AppDomain.CurrentDomain.GetAssemblies();
             var discoveredTypes = new List<(Type type, SnapshotableAttribute attr, bool isBuffer)>();
@@ -125,6 +133,8 @@ namespace NoMoreEngine.Simulation.Snapshot
 
                 Debug.Log($"[SnapshotManager] [{i}] Registered {(isBuffer ? "buffer" : "component")}: {type.Name} " + $"(size: {typeInfo.size}, priority: {attr.Priority})");
             }
+
+            Debug.Log($"[SnapshotManager] Excluded singleton types from snapshot discovery");
         }
 
         /// <summary>
@@ -168,25 +178,24 @@ namespace NoMoreEngine.Simulation.Snapshot
         }
 
         /// <summary>
-        /// Create entity query for all snapshotable entities
+        /// Create entity query for snapshotable game entities
         /// </summary>
         private void CreateSnapshotQuery()
         {
-            if (snapshotTypes.Count == 0)
-            {
-                Debug.LogWarning("[SnapshotManager] No snapshotable types found!");
-                return;
-            }
-
-            var allTypes = snapshotTypes.Select(t => t.componentType).ToArray();
-
+            // Query for game entities only - those with transforms and entity types
             var queryDesc = new EntityQueryDesc
             {
-                Any = allTypes,
+                All = new ComponentType[] 
+                { 
+                    typeof(FixTransformComponent),
+                    typeof(SimEntityTypeComponent)
+                },
                 Options = EntityQueryOptions.IncludeDisabledEntities
             };
 
             snapshotQuery = entityManager.CreateEntityQuery(queryDesc);
+            
+            Debug.Log("[SnapshotManager] Created query for game entities only");
         }
         
         /// <summary>
@@ -650,25 +659,40 @@ namespace NoMoreEngine.Simulation.Snapshot
         {
             bytesWritten = typeInfo.size;
             
-            if (typeInfo.size == 0) return; // Tag component
+            if (typeInfo.size == 0) 
+            {
+                // Tag component - nothing to copy, but we track that it exists
+                return;
+            }
             
             try
             {
+                // For non-zero sized components, use GetComponentData
                 var component = em.GetComponentData<T>(entity);
                 UnsafeUtility.CopyStructureToPtr(ref component, (void*)dest);
             }
             catch (Exception e)
             {
                 Debug.LogError($"[SnapshotHandler] Failed to copy component {typeof(T).Name}: {e.Message}");
+                bytesWritten = 0;
             }
         }
         
         public unsafe void CopyFromSnapshot(EntityManager em, Entity entity, IntPtr src)
         {
-            if (typeInfo.size == 0) return; // Tag component
+            if (typeInfo.size == 0) 
+            {
+                // Tag component - just ensure it exists
+                if (!em.HasComponent<T>(entity))
+                {
+                    em.AddComponent<T>(entity);
+                }
+                return;
+            }
             
             try
             {
+                // For non-zero sized components, use SetComponentData
                 var component = default(T);
                 UnsafeUtility.CopyPtrToStructure((void*)src, out component);
                 em.SetComponentData(entity, component);
@@ -679,11 +703,7 @@ namespace NoMoreEngine.Simulation.Snapshot
             }
         }
         
-        public void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap)
-        {
-            // Components don't have entity references by default
-        }
-        
+        public void RemapEntityReferences(EntityManager em, Entity entity, NativeHashMap<Entity, Entity> remap) { }
         public bool RequiresRemapping => false;
     }
     

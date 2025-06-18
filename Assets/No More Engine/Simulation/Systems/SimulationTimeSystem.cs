@@ -1,8 +1,9 @@
 using Unity.Entities;
-using Unity.Collections;
 using UnityEngine;
 using NoMoreEngine.Simulation.Components;
 using System.Diagnostics;
+using NoMoreEngine.Simulation.Bridge;
+using Unity.Mathematics.FixedPoint;
 
 namespace NoMoreEngine.Simulation.Systems
 {
@@ -19,9 +20,6 @@ namespace NoMoreEngine.Simulation.Systems
         // Performance monitoring
         private float lastFpsUpdate = 0f;
         private int frameCount = 0;
-        
-        // Track if we've initialized
-        private bool isInitialized = false;
         
         // Grace period handling
         private float gracePeriodEndTime = 0f;
@@ -59,58 +57,26 @@ namespace NoMoreEngine.Simulation.Systems
         }
         
         private PerformanceMetrics currentMetrics;
-        
+
         protected override void OnCreate()
         {
             // Get reference to fixed step group
             fixedStepGroup = World.GetOrCreateSystemManaged<SimulationStepSystemGroup>();
-            
+
             // Set initial grace period for startup
             gracePeriodEndTime = UnityEngine.Time.time + STARTUP_GRACE_PERIOD;
-            
-            // NEW: Initialize performance tracking
+
+            // Initialize performance tracking
             tickStopwatch = new Stopwatch();
             currentMetrics = new PerformanceMetrics();
-        }
-        
-        protected override void OnStartRunning()
-        {
-            // Ensure singleton exists when system starts running
-            EnsureTimeSingleton();
-        }
-        
-        private void EnsureTimeSingleton()
-        {
-            if (isInitialized) return;
-            
-            // Check if singleton already exists
-            var timeQuery = GetEntityQuery(typeof(SimulationTimeComponent));
-            var accumulatorQuery = GetEntityQuery(typeof(TimeAccumulatorComponent));
-            
-            if (timeQuery.IsEmpty || accumulatorQuery.IsEmpty)
-            {
-                UnityEngine.Debug.Log("[SimulationTimeSystem] Creating time singleton entity");
-                
-                var entity = EntityManager.CreateEntity();
-                EntityManager.SetName(entity, "SimulationTime");
-                
-                // Add time components with default 60Hz configuration
-                EntityManager.AddComponentData(entity, SimulationTimeComponent.Create60Hz());
-                EntityManager.AddComponentData(entity, TimeAccumulatorComponent.Create60Hz());
-            }
-            
-            isInitialized = true;
+
+            // The time singleton is created by SimulationWorldManager
+            // We just need to require it exists
+            RequireForUpdate<SimulationTimeComponent>();
         }
         
         protected override void OnUpdate()
         {
-            // Ensure initialization
-            if (!isInitialized)
-            {
-                EnsureTimeSingleton();
-                return; // Skip this frame to let structural changes complete
-            }
-            
             // Get Unity frame time
             float unityDeltaTime = SystemAPI.Time.DeltaTime;
             
@@ -304,24 +270,63 @@ namespace NoMoreEngine.Simulation.Systems
         }
         
         /// <summary>
+        /// Restore simulation time to a specific tick (for snapshot restoration)
+        /// </summary>
+        public void RestoreToTick(uint tick)
+        {
+            UnityEngine.Debug.Log($"[SimulationTimeSystem] Restoring time to tick {tick}");
+            
+            if (SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time) &&
+                SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
+            {
+                // Update time to restored tick
+                time.currentTick = tick;
+                time.lastConfirmedTick = tick > 0 ? tick - 1 : 0;
+                time.elapsedTime = (fp)(tick / 60f); // Assuming 60Hz
+                time.ticksThisSecond = 0; // Reset tick counter
+                
+                // Reset accumulator to prevent catch-up
+                accumulator.Reset();
+                
+                // Write back modified components
+                SystemAPI.SetSingleton(time);
+                SystemAPI.SetSingleton(accumulator);
+                
+                // Set grace period to prevent catch-up issues
+                SetGracePeriod(RESTORATION_GRACE_PERIOD);
+                
+                // Reset performance metrics
+                currentMetrics.Reset();
+                tickCount = 0;
+                totalTickMs = 0;
+                worstTickMs = 0;
+                slowTickCount = 0;
+            }
+            else
+            {
+                UnityEngine.Debug.LogError("[SimulationTimeSystem] Failed to restore time - components not found!");
+            }
+        }
+        
+        /// <summary>
         /// Reset simulation time (useful for new matches)
         /// </summary>
         public void ResetSimulationTime()
         {
             UnityEngine.Debug.Log("[SimulationTimeSystem] Resetting simulation time");
-            
+
             if (SystemAPI.TryGetSingleton<SimulationTimeComponent>(out var time) &&
                 SystemAPI.TryGetSingleton<TimeAccumulatorComponent>(out var accumulator))
             {
                 // Reset time
                 time = SimulationTimeComponent.Create60Hz();
                 SystemAPI.SetSingleton(time);
-                
+
                 // Reset accumulator
                 accumulator.Reset();
                 SystemAPI.SetSingleton(accumulator);
             }
-            
+
             // NEW: Reset performance metrics
             currentMetrics.Reset();
             tickCount = 0;

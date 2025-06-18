@@ -116,126 +116,38 @@ namespace NoMoreEngine.Simulation.Snapshot
         /// </summary>
         public bool RestoreSnapshot(uint tick)
         {
-            Debug.Log($"[SnapshotSystem] Beginning deterministic snapshot restore to tick {tick}");
+            Debug.Log($"[SnapshotSystem] Beginning snapshot restore to tick {tick}");
             
-            // Log state before restore
-            LogSystemState("Before Restore", tick);
-
-            // 1. First destroy all game entities (but preserve critical singletons)
-            DestroyGameEntities();
+            // 1. Destroy all game entities through SimulationEntityManager
+            if (SimulationEntityManager.Instance == null)
+            {
+                Debug.LogError("[SnapshotSystem] SimulationEntityManager not available!");
+                return false;
+            }
             
-            //2. Restore the snapshot (includes entity remapping)
+            SimulationEntityManager.Instance.DestroyAllManagedEntities();
+            
+            // 2. Restore the snapshot (creates new game entities)
             if (!snapshotManager.RestoreSnapshot(tick))
             {
                 Debug.LogError($"[SnapshotSystem] Failed to restore snapshot for tick {tick}");
                 return false;
             }
 
-            // 3. Restore time components
-            RestoreTimeComponents(tick);
+            // 3. Update time on the existing singleton
+            if (timeSystem != null)
+            {
+                timeSystem.RestoreToTick(tick);
+            }
 
-            // 4. Ensure singletons are properly restored
-            EnsureSingletons();
-
-            // 5. Force collision state initialization
+            // 4. Initialize collision states on restored entities
             InitializeCollisionStates();
 
-            // 6. Reconnect input system
+            // 5. Reconnect input system
             RestorePlayerControl();
-
-            // 7. Log final state
-            LogSystemState("After Restore", tick);
             
             Debug.Log($"[SnapshotSystem] Successfully restored snapshot at tick {tick}");
             return true;
-        }
-
-        private void DestroyGameEntities()
-        {
-            // Use SimulationEntityManager to destroy all tracked entities
-            // This ensures tracking stays in sync
-            if (SimulationEntityManager.Instance != null)
-            {
-                SimulationEntityManager.Instance.DestroyAllManagedEntities();
-            }
-            else
-            {
-                // Fallback if SimulationEntityManager not available
-                var gameEntityQuery = EntityManager.CreateEntityQuery(
-                    new EntityQueryDesc
-                    {
-                        Any = new ComponentType[]
-                        {
-                            typeof(SimEntityTypeComponent),
-                            typeof(FixTransformComponent),
-                            typeof(SimpleMovementComponent)
-                        },
-                        Options = EntityQueryOptions.IncludeDisabledEntities
-                    }
-                );
-
-                EntityManager.DestroyEntity(gameEntityQuery);
-                gameEntityQuery.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// Restore time components after snapshot restore
-        /// </summary>
-        private void RestoreTimeComponents(uint tick)
-        {
-            // Destroy existing time entities
-            var timeQuery = EntityManager.CreateEntityQuery(typeof(SimulationTimeComponent));
-            EntityManager.DestroyEntity(timeQuery);
-            timeQuery.Dispose();
-
-            // Create fresh time entity
-            var entity = EntityManager.CreateEntity();
-            EntityManager.SetName(entity, "SimulationTime_Restored");
-
-            // Add time components
-            EntityManager.AddComponent<TimeAccumulatorComponent>(entity);
-            EntityManager.AddComponent<SimulationTimeComponent>(entity);
-
-            // Initialize with proper values
-            EntityManager.SetComponentData(entity, new TimeAccumulatorComponent
-            {
-                accumulator = 0f,
-                fixedDeltaTime = 1f / 60f,
-                maxCatchUpSteps = 3,
-                stepsLastFrame = 0
-            });
-
-            // Set time to restored tick
-            var timeComponent = SimulationTimeComponent.Create60Hz();
-            timeComponent.currentTick = tick;
-            timeComponent.lastConfirmedTick = tick > 0 ? tick - 1 : 0;
-            timeComponent.elapsedTime = (fp)(tick / 60f); // Assuming 60Hz
-
-            EntityManager.SetComponentData(entity, timeComponent);
-        }
-
-        private void EnsureSingletons()
-        {
-            // Ensure collision Layer matrix exists
-            var layerMatrixQuery = EntityManager.CreateEntityQuery(typeof(CollisionLayerMatrix));
-            if (layerMatrixQuery.IsEmpty)
-            {
-                var entity = EntityManager.CreateEntity();
-                EntityManager.AddComponentData(entity, CollisionLayerMatrix.CreateDefault());
-                Debug.Log("[SnapshotSystem] Recreated CollisionLayerMatrix singleton");
-            }
-            layerMatrixQuery.Dispose();
-
-            // Ensure global gravity exists
-            var gravityQuery = EntityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
-            if (gravityQuery.IsEmpty)
-            {
-                var entity = EntityManager.CreateEntity();
-                EntityManager.AddComponentData(entity, GlobalGravityComponent.EarthGravity);
-                Debug.Log("[SnapshotSystem] Recreated GlobalGravity singleton");
-            }
-            gravityQuery.Dispose();
         }
 
         private void InitializeCollisionStates()

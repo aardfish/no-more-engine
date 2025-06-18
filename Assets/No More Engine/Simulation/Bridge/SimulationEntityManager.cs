@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using NoMoreEngine.Simulation.Components;
 using Unity.Mathematics.FixedPoint;
 using Unity.Collections;
+using System;
 
 namespace NoMoreEngine.Simulation.Bridge
 {
@@ -228,20 +229,20 @@ namespace NoMoreEngine.Simulation.Bridge
         {
             // Create empty archetype for restoration
             var archetype = entityManager.CreateArchetype();
-            
+
             // Create entities
             var entities = new NativeArray<Entity>(count, allocator);
             entityManager.CreateEntity(archetype, entities);
-            
+
             // Pre-track all entities as Unknown category (will be updated during restore)
             for (int i = 0; i < count; i++)
             {
                 TrackEntity(entities[i], EntityCategory.Unknown, $"Restoring_{entities[i].Index}");
             }
-            
+
             if (debugLogging)
                 Debug.Log($"[EntityManager] Created and tracked {count} entities for snapshot restore");
-            
+
             return entities;
         }
 
@@ -317,39 +318,23 @@ namespace NoMoreEngine.Simulation.Bridge
         }
 
         /// <summary>
-        /// Destroy all managed entities
+        /// Destroy all managed entities excluding singletons
         /// </summary>
         public void DestroyAllManagedEntities()
         {
             Debug.Log($"[EntityManager] DestroyAllManagedEntities called - tracking {allSimulationEntities.Count} entities");
-
-            // Log category breakdown
-            foreach (var kvp in categorizedEntities)
-            {
-                if (kvp.Value.Count < 0)
-                {
-                    Debug.Log($"[EntityManager] Category {kvp.Key}: {kvp.Value.Count} entities");
-                }
-            }
 
             // Copy to avoid modification during iteration
             var toDestroy = new Entity[allSimulationEntities.Count];
             allSimulationEntities.CopyTo(toDestroy);
 
             int destroyedCount = 0;
-            int notExistCount = 0;
-
             foreach (var entity in toDestroy)
             {
                 if (entityManager.Exists(entity))
                 {
                     entityManager.DestroyEntity(entity);
                     destroyedCount++;
-                }
-                else
-                {
-                    notExistCount++;
-                    Debug.LogWarning($"[EntityManager] Tracked entity {entity.Index} no longer exists!");
                 }
             }
 
@@ -361,7 +346,7 @@ namespace NoMoreEngine.Simulation.Bridge
                 category.Clear();
             }
 
-            Debug.Log($"[EntityManager] Destroyed {destroyedCount} entities, {notExistCount} were already gone");
+            Debug.Log($"[EntityManager] Destroyed {destroyedCount} game entities");
         }
 
         #endregion

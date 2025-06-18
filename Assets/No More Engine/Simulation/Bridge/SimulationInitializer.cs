@@ -3,6 +3,7 @@ using Unity.Entities;
 using NoMoreEngine.Session;
 using NoMoreEngine.Simulation.Components;
 using Unity.Mathematics.FixedPoint;
+using UnityEngine.Video;
 
 
 namespace NoMoreEngine.Simulation.Bridge
@@ -41,9 +42,6 @@ namespace NoMoreEngine.Simulation.Bridge
                 return false;
             }
             
-            // Get Unity's EntityManager
-            entityManager = simulationWorld.EntityManager;
-
             // Initialize our simulation entity manager with world
             simEntityManager.Initialize(simulationWorld);
 
@@ -51,9 +49,6 @@ namespace NoMoreEngine.Simulation.Bridge
 
             // Clean up any previous match entities
             CleanupMatch();
-
-            // Ensure required singletons exist
-            EnsureSimulationSingletons();
 
             // Create stage/environment
             CreateStage(config.stageName);
@@ -76,41 +71,7 @@ namespace NoMoreEngine.Simulation.Bridge
 
             simEntityManager.DestroyAllManagedEntities();
         }
-
-        private void EnsureSimulationSingletons()
-        {
-            // Use Unity's EntityManager for queries
-            var manager = entityManager;
-
-            // Collision Layer matrix
-            var layerMatrixQuery = manager.CreateEntityQuery(typeof(CollisionLayerMatrix));
-            if (layerMatrixQuery.IsEmpty)
-            {
-                var archetype = simEntityManager.GetOrCreateArchetype(
-                    "CollisionMatrix",
-                    typeof(CollisionLayerMatrix)
-                );
-                var entity = simEntityManager.CreateEntity(archetype, EntityCategory.System, "CollisionLayerMatrix");
-                manager.SetComponentData(entity, CollisionLayerMatrix.CreateDefault());
-                Debug.Log("[SimulationInit] Created collision layer matrix");
-            }
-            layerMatrixQuery.Dispose();
-
-            // Global gravity
-            var gravityQuery = manager.CreateEntityQuery(typeof(GlobalGravityComponent));
-            if (gravityQuery.IsEmpty)
-            {
-                var archetype = simEntityManager.GetOrCreateArchetype(
-                    "GlobalGravity",
-                    typeof(GlobalGravityComponent)
-                );
-                var entity = simEntityManager.CreateEntity(archetype, EntityCategory.System, "GlobalGravity");
-                manager.SetComponentData(entity, GlobalGravityComponent.EarthGravity);
-                Debug.Log("[SimulationInit] Created global gravity");
-            }
-            gravityQuery.Dispose();
-        }
-
+        
         private void CreateStage(string stageName)
         {
             Debug.Log($"[SimulationInit] Creating stage: {stageName}");

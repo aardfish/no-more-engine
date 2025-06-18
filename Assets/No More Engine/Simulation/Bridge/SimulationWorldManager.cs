@@ -17,7 +17,6 @@ namespace NoMoreEngine.Simulation.Bridge
     {
         [Header("World Settings")]
         [SerializeField] private bool autoInitialize = true;
-        [SerializeField] private bool createDefaultGravity = true;
 
         // Core ECS references
         private EntityManager entityManager;
@@ -28,6 +27,11 @@ namespace NoMoreEngine.Simulation.Bridge
         private EntityQuery movingEntityQuery;
         private EntityQuery physicsEntityQuery;
         private EntityQuery collisionEntityQuery;
+
+        // Track system singleton entities
+        private Entity timeEntity;
+        private Entity gravityEntity;
+        private Entity collisionMatrixEntity;
 
         // Initialization state
         private bool isInitialized = false;
@@ -75,11 +79,8 @@ namespace NoMoreEngine.Simulation.Bridge
             // Create essential entity queries
             CreateEntityQueries();
 
-            // Setup default components if needed
-            if (createDefaultGravity)
-            {
-                EnsureGlobalGravityExists();
-            }
+            // Create system singletons ONCE
+            CreateSystemSingletons();
 
             isInitialized = true;
             Debug.Log("SimulationWorldManager initialized successfully");
@@ -114,22 +115,83 @@ namespace NoMoreEngine.Simulation.Bridge
                 typeof(CollisionBoundsComponent)
             );
         }
-
-        /// <summary>
-        /// Ensure global gravity component exists
-        /// </summary>
-        private void EnsureGlobalGravityExists()
+        
+        private void CreateSystemSingletons()
         {
-            var gravityQuery = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
+            // Clean up any duplicates first
+            CleanupDuplicateSingletons();
 
+            // Time singleton
+            var timeQuery = entityManager.CreateEntityQuery(typeof(SimulationTimeComponent));
+            if (timeQuery.IsEmpty)
+            {
+                timeEntity = entityManager.CreateEntity();
+                entityManager.SetName(timeEntity, "SYSTEM_Time");
+                entityManager.AddComponentData(timeEntity, SimulationTimeComponent.Create60Hz());
+                entityManager.AddComponentData(timeEntity, TimeAccumulatorComponent.Create60Hz());
+                Debug.Log("[SimulationWorldManager] Created time singleton");
+            }
+            else
+            {
+                timeEntity = timeQuery.GetSingletonEntity();
+            }
+            timeQuery.Dispose();
+            
+            // Global gravity singleton
+            var gravityQuery = entityManager.CreateEntityQuery(typeof(GlobalGravityComponent));
             if (gravityQuery.IsEmpty)
             {
-                var entity = entityManager.CreateEntity();
-                entityManager.AddComponentData(entity, GlobalGravityComponent.EarthGravity);
-                Debug.Log("Created default global gravity component");
+                gravityEntity = entityManager.CreateEntity();
+                entityManager.SetName(gravityEntity, "SYSTEM_Gravity");
+                entityManager.AddComponentData(gravityEntity, GlobalGravityComponent.EarthGravity);
+                Debug.Log("[SimulationWorldManager] Created gravity singleton");
+            }
+            else
+            {
+                gravityEntity = gravityQuery.GetSingletonEntity();
+            }
+            gravityQuery.Dispose();
+            
+            // Collision matrix singleton
+            var matrixQuery = entityManager.CreateEntityQuery(typeof(CollisionLayerMatrix));
+            if (matrixQuery.IsEmpty)
+            {
+                collisionMatrixEntity = entityManager.CreateEntity();
+                entityManager.SetName(collisionMatrixEntity, "SYSTEM_CollisionMatrix");
+                entityManager.AddComponentData(collisionMatrixEntity, CollisionLayerMatrix.CreateDefault());
+                Debug.Log("[SimulationWorldManager] Created collision matrix singleton");
+            }
+            else
+            {
+                collisionMatrixEntity = matrixQuery.GetSingletonEntity();
+            }
+            matrixQuery.Dispose();
+        }
+        
+        private void CleanupDuplicateSingletons()
+        {
+            CleanupDuplicatesOfType<SimulationTimeComponent>("Time");
+            CleanupDuplicatesOfType<GlobalGravityComponent>("Gravity");
+            CleanupDuplicatesOfType<CollisionLayerMatrix>("CollisionMatrix");
+        }
+
+        private void CleanupDuplicatesOfType<T>(string name) where T : IComponentData
+        {
+            var query = entityManager.CreateEntityQuery(typeof(T));
+            var entities = query.ToEntityArray(Allocator.Temp);
+
+            if (entities.Length > 1)
+            {
+                Debug.LogWarning($"[SimulationWorldManager] Found {entities.Length} {name} singletons, cleaning duplicates");
+                // Keep first, destroy rest
+                for (int i = 1; i < entities.Length; i++)
+                {
+                    entityManager.DestroyEntity(entities[i]);
+                }
             }
 
-            gravityQuery.Dispose();
+            entities.Dispose();
+            query.Dispose();
         }
 
         #endregion
