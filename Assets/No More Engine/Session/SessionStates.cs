@@ -47,23 +47,31 @@ namespace NoMoreEngine.Session
     {
         public override void HandleInput()
         {
-            // Check for any player wanting to start
+            // Quick start
             if (NoMoreInput.AnyButtonDown(InputButton.Action1) || 
                 NoMoreInput.AnyButtonDown(InputButton.Menu1))
             {
                 StartQuickMatch();
+            }
+            
+            // Replay mode with Action3 (X/E)
+            if (NoMoreInput.Player1.GetButtonDown(InputButton.Action3))
+            {
+                GoToReplayMode();
             }
         }
 
         private void StartQuickMatch()
         {
             Debug.Log("[MainMenu] Going to mission lobby...");
-
-            // Clear any existing players
             context.gameConfig.ClearAllPlayers();
-
-            // Go to mission lobby
             context.coordinator.TransitionTo(SessionStateType.MissionLobby);
+        }
+        
+        private void GoToReplayMode()
+        {
+            Debug.Log("[MainMenu] Going to replay mode...");
+            context.coordinator.TransitionTo(SessionStateType.ReplayMode);
         }
     }
 
@@ -121,7 +129,7 @@ namespace NoMoreEngine.Session
 
             // Handle navigation with tick-based repeat prevention
             ticksSinceLastNavigation++;
-            
+
             if (ticksSinceLastNavigation >= NAVIGATION_REPEAT_TICKS)
             {
                 // Use convenience navigation properties
@@ -444,7 +452,7 @@ namespace NoMoreEngine.Session
         {
             base.OnEnter();
             Debug.Log("[Pause] Game paused");
-            
+
             // Pause the simulation
             var simControl = GameObject.FindAnyObjectByType<SimulationController>();
             simControl?.PauseSimulation();
@@ -453,7 +461,7 @@ namespace NoMoreEngine.Session
         public override void OnExit()
         {
             base.OnExit();
-            
+
             // Resume the simulation
             var simControl = GameObject.FindAnyObjectByType<SimulationController>();
             simControl?.ResumeSimulation();
@@ -501,7 +509,7 @@ namespace NoMoreEngine.Session
         {
             base.OnEnter();
             Debug.Log("[VersusLobby] Entered versus lobby");
-            
+
             // Reset timers
             for (int i = 0; i < 4; i++)
             {
@@ -523,7 +531,7 @@ namespace NoMoreEngine.Session
             {
                 var player = NoMoreInput.GetPlayer(i);
                 var slot = context.gameConfig.playerSlots[i];
-                
+
                 if (playerJoinTickTimers[i] == 0)
                 {
                     if (slot.IsEmpty)
@@ -543,7 +551,7 @@ namespace NoMoreEngine.Session
                             LeavePlayer(i);
                             playerJoinTickTimers[i] = JOIN_COOLDOWN_TICKS;
                         }
-                        
+
                         // Toggle ready with Action1
                         if (player.GetButtonDown(InputButton.Action1))
                         {
@@ -553,7 +561,7 @@ namespace NoMoreEngine.Session
                     }
                 }
             }
-            
+
             // P1 can start if all ready
             if (NoMoreInput.Player1.GetButtonDown(InputButton.Menu1))
             {
@@ -562,7 +570,7 @@ namespace NoMoreEngine.Session
                     StartMatch();
                 }
             }
-            
+
             // P1 can go back
             if (NoMoreInput.Player1.Cancel)
             {
@@ -594,5 +602,183 @@ namespace NoMoreEngine.Session
             Debug.Log("[VersusLobby] Starting versus match");
             context.coordinator.TransitionTo(SessionStateType.InGame);
         }
+    }
+    
+    /// <summary>
+    /// Replay Mode - Browse, play, and test replays for determinism
+    /// </summary>
+    public class ReplayModeState : SessionStateBase
+    {
+        // Replay browser
+        private string[] availableReplays;
+        private int selectedReplayIndex = 0;
+        private InputRecording loadedRecording;
+        
+        // Test modes
+        public enum ReplayTestMode
+        {
+            ViewOnly,
+            DeterminismTest,
+            CompareRuns
+        }
+        private ReplayTestMode currentMode = ReplayTestMode.ViewOnly;
+        
+        // Determinism test state
+        private NoMoreEngine.DevTools.DeterminismTester determinismTester;
+        private bool testInProgress = false;
+        
+        public override void OnEnter()
+        {
+            base.OnEnter();
+            Debug.Log("[ReplayMode] Entered replay mode");
+            
+            // Load available replays
+            RefreshReplayList();
+            
+            // Create determinism tester if needed
+            if (determinismTester == null)
+            {
+                var tester = new GameObject("DeterminismTester");
+                determinismTester = tester.AddComponent<NoMoreEngine.DevTools.DeterminismTester>();
+            }
+        }
+        
+        public override void OnExit()
+        {
+            // Clean up tester
+            if (determinismTester != null && determinismTester.gameObject != null)
+            {
+                GameObject.Destroy(determinismTester.gameObject);
+                determinismTester = null;
+            }
+            
+            base.OnExit();
+        }
+        
+        public override void HandleInput()
+        {
+            var player = NoMoreInput.Player1;
+            
+            // Back to main menu
+            if (player.Cancel)
+            {
+                context.coordinator.TransitionTo(SessionStateType.MainMenu);
+                return;
+            }
+            
+            // Navigate replays
+            if (availableReplays != null && availableReplays.Length > 0)
+            {
+                if (player.NavigateUp && selectedReplayIndex > 0)
+                {
+                    selectedReplayIndex--;
+                    LoadReplayInfo();
+                }
+                else if (player.NavigateDown && selectedReplayIndex < availableReplays.Length - 1)
+                {
+                    selectedReplayIndex++;
+                    LoadReplayInfo();
+                }
+            }
+            
+            // Mode selection
+            if (player.GetButtonDown(InputButton.Action3)) // X/E
+            {
+                currentMode = (ReplayTestMode)(((int)currentMode + 1) % 3);
+                Debug.Log($"[ReplayMode] Switched to {currentMode}");
+            }
+            
+            // Start replay/test
+            if (player.Confirm && !testInProgress && loadedRecording != null)
+            {
+                StartReplayTest();
+            }
+        }
+        
+        private void RefreshReplayList()
+        {
+            availableReplays = InputRecorder.GetAvailableReplays();
+            if (availableReplays.Length > 0)
+            {
+                selectedReplayIndex = 0;
+                LoadReplayInfo();
+            }
+            else
+            {
+                loadedRecording = null;
+            }
+        }
+        
+        private void LoadReplayInfo()
+        {
+            if (availableReplays == null || selectedReplayIndex >= availableReplays.Length)
+                return;
+            
+            try
+            {
+                string replayPath = System.IO.Path.Combine(
+                    Application.persistentDataPath, 
+                    "Replays", 
+                    availableReplays[selectedReplayIndex] + ".nmr"
+                );
+                
+                using (var stream = System.IO.File.OpenRead(replayPath))
+                using (var reader = new System.IO.BinaryReader(stream))
+                {
+                    loadedRecording = InputRecording.Deserialize(reader);
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[ReplayMode] Failed to load replay info: {e.Message}");
+                loadedRecording = null;
+            }
+        }
+        
+        private void StartReplayTest()
+        {
+            testInProgress = true;
+            
+            switch (currentMode)
+            {
+                case ReplayTestMode.ViewOnly:
+                    // Just play the replay
+                    LaunchReplay(false);
+                    break;
+                    
+                case ReplayTestMode.DeterminismTest:
+                    // Play twice and compare
+                    determinismTester.StartDeterminismTest(loadedRecording);
+                    break;
+                    
+                case ReplayTestMode.CompareRuns:
+                    // Compare against live play
+                    determinismTester.StartComparisonTest(loadedRecording);
+                    break;
+            }
+        }
+        
+        private void LaunchReplay(bool captureForTest)
+        {
+            // Configure game for replay
+            context.gameConfig.ClearAllPlayers();
+            context.gameConfig.AddPlayer(PlayerType.Local, 0); // TODO: Restore from replay metadata
+            
+            // Transition to game with replay active
+            context.isReplayActive = true;
+            context.replayToPlay = loadedRecording;
+            context.captureForDeterminism = captureForTest;
+            
+            context.coordinator.TransitionTo(SessionStateType.InGame);
+        }
+        
+        // Public properties for UI
+        public string[] AvailableReplays => availableReplays;
+        public int SelectedIndex => selectedReplayIndex;
+        public string SelectedReplayName => availableReplays?.Length > 0 ? 
+            availableReplays[selectedReplayIndex] : null;
+        public InputRecording LoadedRecording => loadedRecording;
+        public ReplayTestMode CurrentMode => currentMode;
+        public bool TestInProgress => testInProgress;
     }
 }

@@ -40,6 +40,9 @@ namespace NoMoreEngine.Viewer.UI
                 case SessionStateType.Results:
                     DrawResults();
                     break;
+                case SessionStateType.ReplayMode:
+                    DrawReplayMode();
+                    break;
             }
         }
 
@@ -58,10 +61,17 @@ namespace NoMoreEngine.Viewer.UI
 
             GUILayout.Space(10);
 
-            GUI.enabled = false; // Disable for now
+            if (GUILayout.Button("Replay Mode (X/E)", GetButtonStyle(), GUILayout.Height(50)))
+            {
+                coordinator.TransitionTo(SessionStateType.ReplayMode);
+            }
+
+            GUILayout.Space(10);
+
+            GUI.enabled = false;
             if (GUILayout.Button("Versus Mode (Coming Soon)", GetButtonStyle(), GUILayout.Height(50)))
             {
-                // TODO: coordinator.TransitionTo(SessionStateType.VersusLobby);
+                // TODO
             }
             GUI.enabled = true;
 
@@ -172,6 +182,69 @@ namespace NoMoreEngine.Viewer.UI
                 GUILayout.Label("Press any button to continue", GetLabelStyle());
             }
 
+            GUILayout.EndVertical();
+            GUILayout.EndArea();
+        }
+
+        private void DrawReplayMode()
+        {
+            var replayState = coordinator.GetState<ReplayModeState>();
+            if (replayState == null) return;
+            
+            GUILayout.BeginArea(new Rect(Screen.width/2 - 300, Screen.height/2 - 250, 600, 500));
+            GUILayout.BeginVertical("box");
+            
+            GUILayout.Label("REPLAY MODE", GetTitleStyle());
+            GUILayout.Space(20);
+            
+            // Mode indicator
+            GUI.color = Color.cyan;
+            GUILayout.Label($"Mode: {replayState.CurrentMode}", GetLabelStyle());
+            GUI.color = Color.white;
+            GUILayout.Label("Press X/E to change mode", GetLabelStyle());
+            GUILayout.Space(10);
+            
+            // Replay list
+            var replays = replayState.AvailableReplays;
+            if (replays == null || replays.Length == 0)
+            {
+                GUILayout.Label("No replays found", GetLabelStyle());
+            }
+            else
+            {
+                GUILayout.Label($"Available Replays ({replays.Length}):", GetLabelStyle());
+                GUILayout.BeginVertical("box");
+                
+                for (int i = 0; i < replays.Length; i++)
+                {
+                    bool isSelected = i == replayState.SelectedIndex;
+                    GUI.color = isSelected ? Color.cyan : Color.white;
+                    GUILayout.Label($"{(isSelected ? "> " : "  ")}{replays[i]}", GetLabelStyle());
+                }
+                GUI.color = Color.white;
+                
+                GUILayout.EndVertical();
+                
+                // Replay info
+                var recording = replayState.LoadedRecording;
+                if (recording != null)
+                {
+                    GUILayout.Space(10);
+                    GUILayout.Label($"Frames: {recording.FrameCount}", GetLabelStyle());
+                    GUILayout.Label($"Duration: {recording.DurationSeconds:F1}s", GetLabelStyle());
+                    GUILayout.Label($"Date: {recording.recordDate:g}", GetLabelStyle());
+                }
+            }
+            
+            GUILayout.Space(20);
+            
+            // Controls
+            GUILayout.Label("Controls:", GetLabelStyle());
+            GUILayout.Label("• UP/DOWN: Select Replay", GetLabelStyle());
+            GUILayout.Label("• X/E: Change Test Mode", GetLabelStyle());
+            GUILayout.Label("• SPACE/A: Start Test", GetLabelStyle());
+            GUILayout.Label("• F/B: Back to Menu", GetLabelStyle());
+            
             GUILayout.EndVertical();
             GUILayout.EndArea();
         }

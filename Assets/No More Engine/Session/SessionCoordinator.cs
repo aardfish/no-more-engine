@@ -138,6 +138,7 @@ namespace NoMoreEngine.Session
             states[SessionStateType.InGame] = new InGameState();
             states[SessionStateType.Pause] = new PauseState();
             states[SessionStateType.Results] = new ResultsState();
+            states[SessionStateType.ReplayMode] = new ReplayModeState();
 
             // Initialize all states
             foreach (var state in states.Values)
@@ -208,6 +209,7 @@ namespace NoMoreEngine.Session
                 SessionStateType.InGame => InputContext.InGame,
                 SessionStateType.Pause => InputContext.Menu,
                 SessionStateType.Results => InputContext.Menu,
+                SessionStateType.ReplayMode => InputContext.Menu,
                 _ => InputContext.Menu
             };
 

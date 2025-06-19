@@ -343,6 +343,7 @@ GameObject:
   - component: {fileID: 91482595}
   - component: {fileID: 91482593}
   - component: {fileID: 91482597}
+  - component: {fileID: 91482598}
   - component: {fileID: 91482596}
   m_Layer: 0
   m_Name: Input Serializer
@@ -460,6 +461,18 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   enableRecording: 1
   preallocatedFrames: 216000
+--- !u!114 &91482598
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 91482589}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ef65f126c43f15a4fb3a7c30ed39f09b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &237625942
 GameObject:
   m_ObjectHideFlags: 0
@@ -687,6 +700,17 @@ MonoBehaviour:
   testDataFileName: determinism_test_data.json
   showTestResults: 0
   showDetailedOutput: 0
+  currentRunData: []
+  savedTestData:
+    testRuns: []
+  currentFrame: 0
+  isRecording: 0
+  testCompleted: 0
+  determinismPassed: 0
+  lastTestResult: No test run yet
+  totalComparisons: 0
+  failedComparisons: 0
+  dataFilePath: 
 --- !u!114 &883739448
 MonoBehaviour:
   m_ObjectHideFlags: 0
