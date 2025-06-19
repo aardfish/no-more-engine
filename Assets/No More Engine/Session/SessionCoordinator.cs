@@ -253,7 +253,8 @@ namespace NoMoreEngine.Session
         VersusLobby,
         InGame,
         Pause,
-        Results
+        Results,
+        ReplayMode
     }
 
     /// <summary>
@@ -264,6 +265,10 @@ namespace NoMoreEngine.Session
         public SessionCoordinator coordinator;
         public GameConfiguration gameConfig;
         public InputRecording lastRecording;
+
+        public bool isReplayActive = false;
+        public InputRecording replayToPlay = null;
+        public bool captureForDeterminism = false;
     }
 
     /// <summary>

@@ -132,6 +132,12 @@ namespace NoMoreEngine.Viewer.UI
         {
             var resultsState = coordinator.GetState<ResultsState>();
 
+            UnityEngine.Debug.Log($"[SimpleLobbyUI] Drawing results - ResultsState exists: {resultsState != null}");
+            if (resultsState != null)
+            {
+                UnityEngine.Debug.Log($"[SimpleLobbyUI] HasPendingRecording: {resultsState.HasPendingRecording}");
+            }
+
             GUILayout.BeginArea(new Rect(Screen.width/2 - 200, Screen.height/2 - 150, 400, 300));
             GUILayout.BeginVertical("box");
 

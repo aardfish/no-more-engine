@@ -342,6 +342,7 @@ GameObject:
   - component: {fileID: 91482594}
   - component: {fileID: 91482595}
   - component: {fileID: 91482593}
+  - component: {fileID: 91482597}
   - component: {fileID: 91482596}
   m_Layer: 0
   m_Name: Input Serializer
@@ -445,6 +446,20 @@ MonoBehaviour:
   showRawValues: 0
   activeInputColor: {r: 0.1960784, g: 0.8039216, b: 0.1960784, a: 1}
   inactiveColor: {r: 0.5, g: 0.5, b: 0.5, a: 0.5}
+--- !u!114 &91482597
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 91482589}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0bebdd8172e9aae43bd5694c80129ea3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  enableRecording: 1
+  preallocatedFrames: 216000
 --- !u!1 &237625942
 GameObject:
   m_ObjectHideFlags: 0

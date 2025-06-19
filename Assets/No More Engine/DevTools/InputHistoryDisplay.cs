@@ -61,9 +61,9 @@ namespace NoMoreEngine.DevTools
         // Directional display (numpad notation)
         private readonly string[] directionSymbols = new string[]
         {
-            "⬋", "⬇", "⬊",  // 1,2,3
-            "⬅", "●", "➡",  // 4,5,6
-            "⬉", "⬆", "⬈"   // 7,8,9
+            "\u21D9", "\u21E9", "\u21D8",  // 1,2,3
+            "\u21E6",    "●",   "\u21E8",  // 4,5,6
+            "\u21D6", "\u21E7", "\u21D7"   // 7,8,9
         };
 
         void Start()

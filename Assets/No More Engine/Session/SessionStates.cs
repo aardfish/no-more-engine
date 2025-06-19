@@ -230,10 +230,14 @@ namespace NoMoreEngine.Session
             // Stop recording and get the recording data
             var recording = inputRecorder?.StopRecording();
 
+            Debug.Log($"[InGameState] OnExit - InputRecorder exists: {inputRecorder != null}");
+            Debug.Log($"[InGameState] OnExit - Recording: {recording != null}, Frames: {recording?.FrameCount ?? 0}");
+
             // Store recording for Results state to handle
             if (recording != null && recording.FrameCount > 0)
             {
                 context.lastRecording = recording;
+                Debug.Log($"[InGameState] Stored recording in context with {recording.FrameCount} frames");
             }
 
             // Stop simulation
@@ -359,6 +363,8 @@ namespace NoMoreEngine.Session
             // Check if we have a recording to save
             pendingRecording = context.lastRecording;
             context.lastRecording = null;
+
+            Debug.Log($"[Results] Pending recording: {pendingRecording != null}, Frames: {pendingRecording?.FrameCount ?? 0}");
 
             if (pendingRecording != null && pendingRecording.FrameCount > 0)
             {
