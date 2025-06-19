@@ -2,6 +2,7 @@ using UnityEngine;
 using Unity.Entities;
 using NoMoreEngine.Session;
 using Unity.Mathematics.FixedPoint;
+using NoMoreEngine.Simulation.Snapshot;
 
 namespace NoMoreEngine.Simulation.Bridge
 {
@@ -59,6 +60,9 @@ namespace NoMoreEngine.Simulation.Bridge
 
             // Clean up any previous match entities
             CleanupMatch();
+
+            // Prewarm snapshot system
+            SnapshotSystemPrewarm.Prewarm();
 
             // Create stage/environment
             CreateStage(config.stageName);
