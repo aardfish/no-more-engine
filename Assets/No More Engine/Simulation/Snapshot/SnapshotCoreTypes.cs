@@ -193,6 +193,37 @@ namespace NoMoreEngine.Simulation.Snapshot
     }
 
     /// <summary>
+    /// Unmanaged version of SnapshotTypeInfo for use in jobs
+    /// </summary>
+    public struct UnmanagedSnapshotTypeInfo
+    {
+        public int typeIndex;
+        public int size;
+        public bool isBuffer;
+        public bool includeInHash;
+        public int priority;
+        public int maxElements;
+        public bool requiresRemapping;
+        
+        /// <summary>
+        /// Create from managed SnapshotTypeInfo
+        /// </summary>
+        public static UnmanagedSnapshotTypeInfo FromManaged(SnapshotTypeInfo managed)
+        {
+            return new UnmanagedSnapshotTypeInfo
+            {
+                typeIndex = managed.typeIndex,
+                size = managed.size,
+                isBuffer = managed.isBuffer,
+                includeInHash = managed.includeInHash,
+                priority = managed.priority,
+                maxElements = managed.maxElements,
+                requiresRemapping = managed.requiresRemapping
+            };
+        }
+    }
+
+    /// <summary>
     /// Snapshot metadata for validation
     /// </summary>
     public struct SnapshotMetadata : IComponentData

@@ -154,8 +154,6 @@ namespace NoMoreEngine.Simulation.Bridge
 
         #endregion
 
-        // ... (rest of the implementation remains the same) ...
-
         #region Entity Creation
 
         /// <summary>

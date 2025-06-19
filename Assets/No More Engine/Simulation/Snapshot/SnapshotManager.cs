@@ -277,9 +277,9 @@ namespace NoMoreEngine.Simulation.Snapshot
             }
             
             // Create entity remapping for missing entities
-            var entityRemap = new NativeHashMap<Entity, Entity>(snapshot.entityCount, Allocator.Temp);
-            var entitiesToCreate = new NativeList<int>(Allocator.Temp);
-            var entitiesToDestroy = new NativeList<Entity>(Allocator.Temp);
+            var entityRemap = new NativeHashMap<Entity, Entity>(snapshot.entityCount, Allocator.TempJob);
+            var entitiesToCreate = new NativeList<int>(Allocator.TempJob);
+            var entitiesToDestroy = new NativeList<Entity>(Allocator.TempJob);
             
             try
             {
@@ -358,20 +358,27 @@ namespace NoMoreEngine.Simulation.Snapshot
                     
                     newEntities.Dispose();
                 }
+
+                // Convert managed type info to unmanaged for job
+                var unmanagedTypes = new NativeArray<UnmanagedSnapshotTypeInfo>(snapshotTypes.Count, Allocator.TempJob);
+                for (int i = 0; i < snapshotTypes.Count; i++)
+                {
+                    unmanagedTypes[i] = UnmanagedSnapshotTypeInfo.FromManaged(snapshotTypes[i]);
+                }
                 
                 // Phase 4: Restore component data (update existing or newly created entities)
                 var restoreJob = new RestoreComponentDataJob
                 {
                     snapshot = snapshot,
-                    dataPtr = dataPtr,
+                    snapshotData = snapshot.data,
                     entityRemap = entityRemap,
-                    snapshotTypes = new NativeArray<SnapshotTypeInfo>(snapshotTypes.ToArray(), Allocator.TempJob)
+                    snapshotTypes = unmanagedTypes  // Use unmanaged version
                 };
-                
+
                 var jobHandle = restoreJob.Schedule(snapshot.entityCount, 32);
                 jobHandle.Complete();
-                
-                restoreJob.snapshotTypes.Dispose();
+
+                unmanagedTypes.Dispose();  // Dispose the unmanaged array
                 
                 // Phase 5: Manual restoration for components that need special handling
                 for (int i = 0; i < snapshot.entityCount; i++)
@@ -731,15 +738,13 @@ namespace NoMoreEngine.Simulation.Snapshot
     public unsafe struct RestoreComponentDataJob : IJobParallelFor
     {
         [ReadOnly] public SimulationSnapshot snapshot;
-        [ReadOnly] public byte* dataPtr;
+        [ReadOnly] public NativeArray<byte> snapshotData;
         [ReadOnly] public NativeHashMap<Entity, Entity> entityRemap;
-        [ReadOnly] public NativeArray<SnapshotTypeInfo> snapshotTypes;
+        [ReadOnly] public NativeArray<UnmanagedSnapshotTypeInfo> snapshotTypes;  // Changed to unmanaged version
         
         public void Execute(int index)
         {
-            // Job implementation for parallel restoration
-            // Note: This is simplified - actual implementation would need
-            // to handle component-specific restoration in a Burst-compatible way
+            var dataPtr = (byte*)snapshotData.GetUnsafeReadOnlyPtr();
         }
     }
     
