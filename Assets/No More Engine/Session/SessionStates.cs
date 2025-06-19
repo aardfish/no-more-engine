@@ -206,22 +206,34 @@ namespace NoMoreEngine.Session
     }
 
     /// <summary>
-    /// In-Game State - Active gameplay
+    /// In-Game State - Active gameplay (including replay mode)
     /// </summary>
     public class InGameState : SessionStateBase
     {
         private SimulationInitializer simulationInit;
         private SimulationController simulationControl;
         private InputRecorder inputRecorder;
+        private NoMoreEngine.DevTools.InputReplayer inputReplayer;
         private bool simulationActive = false;
         private bool createdBridgeObjects = false;
+        private bool createdReplayObjects = false;
 
         public override void OnEnter()
         {
             base.OnEnter();
 
-            // Get input recorder reference
-            inputRecorder = InputRecorder.Instance;
+            // Check if we're in replay mode
+            if (context.isReplayActive)
+            {
+                Debug.Log($"[InGameState] Entering in REPLAY mode with {context.replayToPlay?.FrameCount ?? 0} frames");
+                SetupReplayMode();
+            }
+            else
+            {
+                Debug.Log("[InGameState] Entering in NORMAL gameplay mode");
+                // Get input recorder reference for normal gameplay
+                inputRecorder = InputRecorder.Instance;
+            }
 
             // Create simulation bridge components
             CreateSimulationBridge();
@@ -229,23 +241,34 @@ namespace NoMoreEngine.Session
             // Start the simulation
             StartSimulation();
 
-            // start recording input
-            inputRecorder?.StartRecording();
+            // Start recording input only in normal mode
+            if (!context.isReplayActive && inputRecorder != null)
+            {
+                inputRecorder.StartRecording();
+            }
         }
 
         public override void OnExit()
         {
-            // Stop recording and get the recording data
-            var recording = inputRecorder?.StopRecording();
-
-            Debug.Log($"[InGameState] OnExit - InputRecorder exists: {inputRecorder != null}");
-            Debug.Log($"[InGameState] OnExit - Recording: {recording != null}, Frames: {recording?.FrameCount ?? 0}");
-
-            // Store recording for Results state to handle
-            if (recording != null && recording.FrameCount > 0)
+            if (context.isReplayActive)
             {
-                context.lastRecording = recording;
-                Debug.Log($"[InGameState] Stored recording in context with {recording.FrameCount} frames");
+                // Clean up replay mode
+                CleanupReplayMode();
+            }
+            else
+            {
+                // Stop recording and get the recording data
+                var recording = inputRecorder?.StopRecording();
+
+                Debug.Log($"[InGameState] OnExit - InputRecorder exists: {inputRecorder != null}");
+                Debug.Log($"[InGameState] OnExit - Recording: {recording != null}, Frames: {recording?.FrameCount ?? 0}");
+
+                // Store recording for Results state to handle
+                if (recording != null && recording.FrameCount > 0)
+                {
+                    context.lastRecording = recording;
+                    Debug.Log($"[InGameState] Stored recording in context with {recording.FrameCount} frames");
+                }
             }
 
             // Stop simulation
@@ -278,15 +301,97 @@ namespace NoMoreEngine.Session
                 simulationControl = null;
             }
 
+            // Reset replay context flags
+            context.isReplayActive = false;
+            context.replayToPlay = null;
+            context.captureForDeterminism = false;
+
             base.OnExit();
         }
 
         public override void HandleInput()
         {
-            // Check all players for pause menu
-            if (NoMoreInput.AnyButtonDown(InputButton.Menu1))
+            // In replay mode, check if replay has finished
+            if (context.isReplayActive && inputReplayer != null && !inputReplayer.IsReplaying)
+            {
+                Debug.Log("[InGameState] Replay finished, returning to results");
+                context.coordinator.TransitionTo(SessionStateType.Results);
+                return;
+            }
+
+            // Check all players for pause menu (only in normal gameplay)
+            if (!context.isReplayActive && NoMoreInput.AnyButtonDown(InputButton.Menu1))
             {
                 EndGame();
+            }
+        }
+
+        private void SetupReplayMode()
+        {
+            // Find or create InputReplayer
+            inputReplayer = GameObject.FindAnyObjectByType<NoMoreEngine.DevTools.InputReplayer>();
+            if (inputReplayer == null)
+            {
+                Debug.Log("[InGameState] Creating InputReplayer for replay mode");
+                var replayerObject = new GameObject("InputReplayer");
+                inputReplayer = replayerObject.AddComponent<NoMoreEngine.DevTools.InputReplayer>();
+                createdReplayObjects = true;
+            }
+
+            // IMPORTANT: Ensure InputSerializer has registered players for replay
+            // The InputSerializer needs to generate packets for the InputReplayer to override
+            var inputSerializer = GameObject.FindAnyObjectByType<InputSerializer>();
+            if (inputSerializer != null && context.replayToPlay != null && context.replayToPlay.FrameCount > 0)
+            {
+                // Get the first frame to see how many players we need
+                var firstFrame = context.replayToPlay.frames[0];
+                if (firstFrame.packets != null)
+                {
+                    Debug.Log($"[InGameState] Registering {firstFrame.packets.Length} dummy players for replay");
+                    
+                    // Register dummy players so InputSerializer generates packets
+                    for (int i = 0; i < firstFrame.packets.Length; i++)
+                    {
+                        byte playerIndex = (byte)i;
+                        inputSerializer.RegisterDummyPlayer(playerIndex);
+                    }
+                }
+            }
+
+            // Start the replay
+            if (context.replayToPlay != null && inputReplayer != null)
+            {
+                inputReplayer.StartReplay(context.replayToPlay);
+                Debug.Log($"[InGameState] Started replay with {context.replayToPlay.FrameCount} frames");
+            }
+            else
+            {
+                Debug.LogError("[InGameState] No recording available for replay!");
+            }
+        }
+
+        private void CleanupReplayMode()
+        {
+            // Stop the replay
+            if (inputReplayer != null)
+            {
+                inputReplayer.StopReplay();
+                
+                // Destroy if we created it
+                if (createdReplayObjects)
+                {
+                    GameObject.Destroy(inputReplayer.gameObject);
+                    createdReplayObjects = false;
+                }
+                
+                inputReplayer = null;
+            }
+            
+            // Clear dummy players from InputSerializer
+            var inputSerializer = GameObject.FindAnyObjectByType<InputSerializer>();
+            if (inputSerializer != null)
+            {
+                inputSerializer.ClearDummyPlayers();
             }
         }
 
@@ -770,6 +875,12 @@ namespace NoMoreEngine.Session
             context.captureForDeterminism = captureForTest;
             
             context.coordinator.TransitionTo(SessionStateType.InGame);
+        }
+
+        // Session context (for DeterminismTester access)
+        public SessionContext GetContext()
+        {
+            return context;
         }
         
         // Public properties for UI

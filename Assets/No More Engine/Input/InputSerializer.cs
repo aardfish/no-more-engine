@@ -148,6 +148,47 @@ namespace NoMoreEngine.Input
         }
 
         /// <summary>
+        /// Register a dummy player for replay mode
+        /// This ensures packets are generated even without actual PlayerInput components
+        /// </summary>
+        public void RegisterDummyPlayer(byte playerIndex)
+        {
+            // Initialize buffer if not exists
+            if (!playerInputBuffers.ContainsKey(playerIndex))
+            {
+                playerInputBuffers[playerIndex] = new Queue<InputSample>();
+                Debug.Log($"[InputSerializer] Registered dummy player {playerIndex} for replay");
+            }
+            
+            // Initialize with neutral input state
+            if (!lastKnownInput.ContainsKey(playerIndex))
+            {
+                lastKnownInput[playerIndex] = new InputPacket(0, 5, 0, 0, 5, 0, playerIndex);
+            }
+        }
+
+        /// <summary>
+        /// Clear all registered dummy players (used when exiting replay mode)
+        /// </summary>
+        public void ClearDummyPlayers()
+        {
+            // Clear all buffers and last known input
+            playerInputBuffers.Clear();
+            lastKnownInput.Clear();
+            
+            // Re-register any actual local players
+            for (int i = 0; i < localPlayers.Count; i++)
+            {
+                if (localPlayers[i] != null)
+                {
+                    RegisterPlayer(localPlayers[i], (byte)i);
+                }
+            }
+            
+            Debug.Log("[InputSerializer] Cleared dummy players and restored local players");
+        }
+
+        /// <summary>
         /// Sample input from all registered players
         /// </summary>
         private void SampleAllPlayerInput()

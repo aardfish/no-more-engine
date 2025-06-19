@@ -5,11 +5,13 @@ using NoMoreEngine.Input;
 using NoMoreEngine.Simulation.Snapshot;
 using NoMoreEngine.Simulation.Components;
 using NoMoreEngine.Simulation.Systems;
+using NoMoreEngine.Session;
 
 namespace NoMoreEngine.DevTools
 {
     /// <summary>
     /// Advanced determinism tester using InputRecorder and SnapshotSystem
+    /// FIXED: Now properly integrates with session flow instead of trying to control simulation directly
     /// </summary>
     public class DeterminismTester : MonoBehaviour
     {
@@ -22,10 +24,13 @@ namespace NoMoreEngine.DevTools
         private InputReplayer replayer;
         private SnapshotSystem snapshotSystem;
         private SimulationTimeSystem timeSystem;
+        private SessionCoordinator sessionCoordinator;
         
         // Test state
         private DeterminismTest currentTest;
         private List<TestResult> testResults = new List<TestResult>();
+        private bool waitingForSimulation = false;
+        private int currentRunNumber = 0;
         
         // Events
         public event System.Action<DeterminismTest> OnTestStarted;
@@ -34,6 +39,7 @@ namespace NoMoreEngine.DevTools
         void Awake()
         {
             recorder = InputRecorder.Instance;
+            sessionCoordinator = SessionCoordinator.Instance;
             
             // Create replayer if needed
             replayer = GetComponent<InputReplayer>();
@@ -45,11 +51,18 @@ namespace NoMoreEngine.DevTools
         
         void Start()
         {
-            var world = World.DefaultGameObjectInjectionWorld;
-            if (world != null)
+            // Subscribe to session state changes
+            if (sessionCoordinator != null)
             {
-                snapshotSystem = world.GetExistingSystemManaged<SnapshotSystem>();
-                timeSystem = world.GetExistingSystemManaged<SimulationTimeSystem>();
+                sessionCoordinator.OnStateChanged += OnSessionStateChanged;
+            }
+        }
+        
+        void OnDestroy()
+        {
+            if (sessionCoordinator != null)
+            {
+                sessionCoordinator.OnStateChanged -= OnSessionStateChanged;
             }
         }
         
@@ -68,7 +81,8 @@ namespace NoMoreEngine.DevTools
             Debug.Log($"[DeterminismTester] Starting determinism test with {recording.FrameCount} frames");
             
             // Start first run
-            StartRun(1);
+            currentRunNumber = 1;
+            StartRunThroughSession();
             
             OnTestStarted?.Invoke(currentTest);
         }
@@ -91,12 +105,72 @@ namespace NoMoreEngine.DevTools
             OnTestStarted?.Invoke(currentTest);
         }
         
-        private void StartRun(int runNumber)
+        private void StartRunThroughSession()
         {
-            Debug.Log($"[DeterminismTester] Starting run {runNumber}");
+            Debug.Log($"[DeterminismTester] Starting run {currentRunNumber} through session flow");
             
-            // Reset simulation to clean state
-            ResetSimulation();
+            // Set up context for replay
+            var context = sessionCoordinator.GetState<ReplayModeState>()?.GetContext();
+            if (context != null)
+            {
+                context.isReplayActive = true;
+                context.replayToPlay = currentTest.recording;
+                context.captureForDeterminism = true;
+                
+                // Mark that we're waiting for simulation to start
+                waitingForSimulation = true;
+                
+                // Transition to InGame
+                sessionCoordinator.TransitionTo(SessionStateType.InGame);
+            }
+            else
+            {
+                Debug.LogError("[DeterminismTester] Could not get session context!");
+            }
+        }
+        
+        private void OnSessionStateChanged(SessionStateType from, SessionStateType to)
+        {
+            // When we transition to InGame and we're waiting, set up the test
+            if (to == SessionStateType.InGame && waitingForSimulation)
+            {
+                waitingForSimulation = false;
+                
+                // Small delay to ensure simulation is fully initialized
+                Invoke(nameof(SetupTestRun), 0.5f);
+            }
+            
+            // When we transition from InGame back to Results/ReplayMode, check if we need another run
+            if (from == SessionStateType.InGame && (to == SessionStateType.Results || to == SessionStateType.ReplayMode))
+            {
+                if (currentTest != null && currentRunNumber == 1 && currentTest.testType == TestType.TwiceReplay)
+                {
+                    // First run complete, start second run
+                    Debug.Log("[DeterminismTester] First run complete, starting second run...");
+                    currentRunNumber = 2;
+                    
+                    // Small delay before starting next run
+                    Invoke(nameof(StartRunThroughSession), 1f);
+                }
+                else if (currentTest != null)
+                {
+                    // Test complete
+                    CompleteTest();
+                }
+            }
+        }
+        
+        private void SetupTestRun()
+        {
+            Debug.Log($"[DeterminismTester] Setting up test for run {currentRunNumber}");
+            
+            // Get system references from the now-initialized world
+            var world = World.DefaultGameObjectInjectionWorld;
+            if (world != null)
+            {
+                snapshotSystem = world.GetExistingSystemManaged<SnapshotSystem>();
+                timeSystem = world.GetExistingSystemManaged<SimulationTimeSystem>();
+            }
             
             // Configure snapshot capture
             if (snapshotSystem != null)
@@ -105,11 +179,8 @@ namespace NoMoreEngine.DevTools
                 snapshotSystem.SetSnapshotInterval((uint)snapshotInterval);
             }
             
-            // Start replay
-            replayer.StartReplay(currentTest.recording);
-            
-            // Subscribe to capture snapshots
-            if (runNumber == 1)
+            // Initialize snapshot storage for this run
+            if (currentRunNumber == 1)
             {
                 currentTest.run1Snapshots = new Dictionary<uint, SnapshotInfo>();
             }
@@ -118,22 +189,29 @@ namespace NoMoreEngine.DevTools
                 currentTest.run2Snapshots = new Dictionary<uint, SnapshotInfo>();
             }
             
-            // Start capturing
+            // Start capturing snapshots
             InvokeRepeating(nameof(CaptureSnapshot), 0.5f, 1f);
         }
         
         private void CaptureSnapshot()
         {
-            if (snapshotSystem == null || !replayer.IsReplaying)
+            // Check if replay is still running
+            var inGameState = sessionCoordinator.GetState<InGameState>();
+            if (inGameState == null || sessionCoordinator.GetCurrentStateType() != SessionStateType.InGame)
             {
                 CancelInvoke(nameof(CaptureSnapshot));
                 return;
             }
             
-            uint currentTick = timeSystem?.GetCurrentTick() ?? 0;
+            if (snapshotSystem == null || timeSystem == null)
+            {
+                return;
+            }
+            
+            uint currentTick = timeSystem.GetCurrentTick();
             var info = snapshotSystem.GetSnapshotInfo(currentTick);
             
-            if (currentTest.run2Snapshots == null)
+            if (currentRunNumber == 1)
             {
                 // First run
                 currentTest.run1Snapshots[currentTick] = info;
@@ -177,32 +255,10 @@ namespace NoMoreEngine.DevTools
             }
         }
         
-        public void OnReplayFinished()
+        private void CompleteTest()
         {
             CancelInvoke(nameof(CaptureSnapshot));
             
-            if (currentTest.run2Snapshots == null && currentTest.testType == TestType.TwiceReplay)
-            {
-                // First run complete, start second run
-                Debug.Log("[DeterminismTester] First run complete, starting second run...");
-                
-                // Small delay to let systems settle
-                Invoke(nameof(StartSecondRun), 0.5f);
-            }
-            else
-            {
-                // Test complete
-                CompleteTest();
-            }
-        }
-        
-        private void StartSecondRun()
-        {
-            StartRun(2);
-        }
-        
-        private void CompleteTest()
-        {
             currentTest.endTime = Time.time;
             
             // Generate result
@@ -213,7 +269,7 @@ namespace NoMoreEngine.DevTools
                 passed = currentTest.divergences.Count == 0,
                 divergenceCount = currentTest.divergences.Count,
                 duration = currentTest.endTime - currentTest.startTime,
-                ticksTested = currentTest.run1Snapshots.Count
+                ticksTested = currentTest.run1Snapshots?.Count ?? 0
             };
             
             testResults.Add(result);
@@ -228,24 +284,7 @@ namespace NoMoreEngine.DevTools
             
             // Clean up
             currentTest = null;
-        }
-        
-        private void ResetSimulation()
-        {
-            Debug.Log("[DeterminismTester] Resetting simulation...");
-            
-            // Reset time
-            timeSystem?.ResetSimulationTime();
-            
-            // Clear all entities
-            var world = World.DefaultGameObjectInjectionWorld;
-            if (world != null)
-            {
-                var entityManager = world.EntityManager;
-                entityManager.DestroyEntity(entityManager.UniversalQuery);
-            }
-            
-            // TODO: Properly reset to clean state
+            currentRunNumber = 0;
         }
         
         // Test data structures
